@@ -1,0 +1,76 @@
+{
+  "name": "@getparafe/verify",
+  "version": "0.1.0",
+  "description": "Offline verification of Parafe credentials, consent tokens, and receipts. No broker account required.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./canonicalize": {
+      "types": "./dist/canonicalize.d.ts",
+      "import": "./dist/canonicalize.js",
+      "require": "./dist/canonicalize.cjs"
+    },
+    "./keys": {
+      "types": "./dist/keys.d.ts",
+      "import": "./dist/keys.js",
+      "require": "./dist/keys.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/canonicalize.ts src/keys.ts --format esm,cjs --dts --clean",
+    "dev": "tsup src/index.ts src/canonicalize.ts src/keys.ts --format esm,cjs --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "fixtures:generate": "tsx tests/scripts/generate-fixtures.ts",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "parafe",
+    "verify",
+    "ed25519",
+    "jwt",
+    "vdc",
+    "verifiable-credential",
+    "agent",
+    "identity",
+    "receipt",
+    "consent",
+    "trust",
+    "a2a"
+  ],
+  "author": "Parafe <hello@parafe.ai>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getparafe/verify.git"
+  },
+  "homepage": "https://parafe.ai",
+  "dependencies": {
+    "jose": "^5.9.6",
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^1.6.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false
+}
