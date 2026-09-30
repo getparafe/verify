@@ -274,6 +274,23 @@ export async function checkMandate(segments: Segment[], opts: Ap2MandateOptions,
       result.closedByKeyThumbprint = await thumbprint(key);
     }
   }
+  // S-59: who signed the first open mandate (the user's limits): the root
+  // issuer itself, or the holder of a root credential (User Credential model:
+  // the user's key). A verifier must check it isn't an agent's key before
+  // treating the limits as the user's.
+  if (opens.length) {
+    const first = opens[0]!;
+    if (first.index === 0) {
+      result.openedBy = 'issuer';
+    } else {
+      result.openedBy = 'credential_holder';
+      const key = cnfJwk(segments[first.index - 1]!);
+      if (key) {
+        result.openedByKey = key;
+        result.openedByKeyThumbprint = await thumbprint(key);
+      }
+    }
+  }
   const c = closed.item!;
 
   // #339: a withheld constraint (or any withheld claim of an open mandate) disables enforcement; refuse it.

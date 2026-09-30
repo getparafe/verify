@@ -120,6 +120,18 @@ export interface Ap2MandateResult extends Ap2ChainResult {
   closedBy?: 'issuer' | 'credential_holder' | 'open_mandate_key';
   closedByKey?: JWK;
   closedByKeyThumbprint?: string;
+  /**
+   * Human not present: who signed the first open mandate, the one that sets the
+   * user's limits: `issuer` (the root is the open mandate, signed by the trusted
+   * issuer) or `credential_holder` (the holder of a trusted root credential, in
+   * AP2's User Credential model the user). As with `closedBy`, a verifier that
+   * trusts an issuer which also certifies agent keys must check `openedByKey`
+   * (or, for `issuer`, the issuer key) is not an agent's: otherwise the agent
+   * wrote its own limits.
+   */
+  openedBy?: 'issuer' | 'credential_holder';
+  openedByKey?: JWK;
+  openedByKeyThumbprint?: string;
   checkoutHash?: string;
   transactionId?: string;
   /** Checkout mandate: the decoded Checkout JWT payload. */

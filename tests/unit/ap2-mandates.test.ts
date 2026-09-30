@@ -435,6 +435,28 @@ describe('Phase 3 review fixes', () => {
     expect(uc.closedByKey).toEqual(pub(K.agent2));
   });
 
+  it('S-59: says who signed the first open mandate (the limits)', async () => {
+    // Root = the open mandate, signed by the issuer.
+    const hnp = await verifyAp2Mandate(V['hnp-checkout'].chain, base({ checkoutJwt: V['hnp-checkout'].checkout_jwt }));
+    expect(hnp.openedBy).toBe('issuer');
+    expect(hnp.openedByKey).toBeUndefined();
+    const hp = await verifyAp2Mandate(V['hp-checkout'].chain, base({ checkoutJwt: V['hp-checkout'].checkout_jwt }));
+    expect(hp.openedBy).toBeUndefined();
+    // User Credential model: a root credential certifies a key; that key signs the open mandate; the agent closes it.
+    const cj = await mkCheckout([['sku_gold', 1]]);
+    const cred = `${await sign({ iss: 'https://bank.example', vct: 'com.emvco.dpc', cnf: { jwk: pub(K.agent2) }, iat }, K.provider, { kid: 'agent-provider-key-1' })}~`;
+    const open = await hop(cred, {
+      vct: 'mandate.checkout.open.1', cnf: { jwk: pub(K.agent) }, iat,
+      constraints: [{ type: 'checkout.line_items', items: [{ id: 'l1', quantity: 1, acceptable_items: [{ id: 'sku_gold', title: 'Gold' }] }] }],
+    }, K.agent2, { iat });
+    const closed = await hop(open, { vct: 'mandate.checkout.1', checkout_jwt: cj, checkout_hash: sha(cj), iat }, K.agent, { iat });
+    const uc = await verifyAp2Mandate(join(cred, open, closed), base());
+    expect(uc.error).toBeUndefined();
+    expect(uc).toMatchObject({ mode: 'human_not_present', openedBy: 'credential_holder', closedBy: 'open_mandate_key' });
+    expect(uc.openedByKey).toEqual(pub(K.agent2));
+    expect(uc.agentKey).toEqual(pub(K.agent));
+  });
+
   it("S-53: a Parafé agent identity credential can't be a mandate's root", async () => {
     const cj = await mkCheckout([['sku_gold', 1]]);
     const cred = `${await sign({ iss: 'did:web:broker.test', vct: 'https://parafe.ai/vct/agent-identity/1', sub: 'did:web:broker.test:agents:prf_agent_x', cnf: { jwk: pub(K.agent) }, iat }, K.provider, { typ: 'dc+sd-jwt' })}~`;
