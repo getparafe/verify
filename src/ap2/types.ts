@@ -36,14 +36,17 @@ export interface Ap2MandateContext {
 
 export interface Ap2ChainOptions {
   trustedIssuers: Ap2TrustedIssuer[];
-  /** The terminal hop's `aud` must equal this (your identifier as the verifier). It must be present either way. */
+  /**
+   * The terminal hop's `aud` must equal this (your identifier as the verifier). It must be present either way.
+   * A root-only chain (no key-binding hop) has no `aud`, so it fails when this is set.
+   */
   expectedAudience?: string;
-  /** The terminal hop's `nonce` must equal this. It must be present either way. */
+  /** The terminal hop's `nonce` must equal this. It must be present either way. A root-only chain fails when this is set. */
   expectedNonce?: string;
   now?: Date;
   /** Clock tolerance for exp/iat/nbf, seconds (default 60). */
   clockToleranceSec?: number;
-  /** Refuse a terminal hop whose `iat` is older than this many seconds. Unset: no limit (dispute-time checks). */
+  /** Refuse a terminal hop whose `iat` is older than this many seconds (a root-only chain: the root's or its mandate's `iat`; none fails). Unset: no limit (dispute-time checks). */
   maxPresentationAgeSec?: number;
 }
 

@@ -112,6 +112,20 @@ async function verifyChainInternal(chain: string, opts: Ap2ChainOptions, result:
   checkTimes('The root', root.claims, nowSec, skew);
   if (root.item) checkTimes('The root mandate', root.item, nowSec, skew);
 
+  // S-60: a root-only chain (the issuer signed the closed mandate itself) has no
+  // key-binding hop, so no aud or nonce. Valid when nothing is expected (as in
+  // AP2), but a caller's expectations are refused, never silently skipped; its
+  // age is the root's (or its mandate's) iat.
+  if (segments.length === 1) {
+    if (opts.expectedAudience !== undefined) throw new Ap2Failure('invalid_credential', 'missing_audience', 'The chain has no key-binding hop, so no aud: it is not presented to anyone');
+    if (opts.expectedNonce !== undefined) throw new Ap2Failure('invalid_credential', 'missing_nonce', 'The chain has no key-binding hop, so no nonce');
+    if (opts.maxPresentationAgeSec !== undefined) {
+      const issued = typeof root.claims.iat === 'number' ? root.claims.iat : root.item?.iat;
+      if (typeof issued !== 'number') throw new Ap2Failure('invalid_credential', 'not_presented', 'The chain has no key-binding hop and no iat, so its age can\'t be checked');
+      if (nowSec - issued > opts.maxPresentationAgeSec + skew) throw new Ap2Failure('invalid_credential', 'stale', `The mandate was signed more than ${opts.maxPresentationAgeSec}s ago`);
+    }
+  }
+
   for (let i = 1; i < segments.length; i++) {
     const seg = segments[i]!;
     const prev = segments[i - 1]!;

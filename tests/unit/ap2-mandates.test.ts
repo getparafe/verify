@@ -173,6 +173,25 @@ describe('AP2 PR #307 golden vectors (chain layer)', () => {
       expect(m.valid).toBe(false);
     });
   }
+  it("S-60: a root-only chain isn't presented to anyone: an expected aud or nonce is refused, not ignored; its age is the root's iat", async () => {
+    const v = pr307.vectors.find((x: { id: string }) => x.id === 'root-single-sd-jwt');
+    const o = { trustedIssuers: [{ jwk: v.root_public_jwk }], now: at };
+    const s: string = v.compact_serialization;
+    expect((await verifyAp2Chain(s, o)).valid).toBe(true); // nothing expected: valid, as in AP2
+    const { decodeJwt } = await import('jose');
+    const iat = decodeJwt(s.split('~')[0]!).iat as number | undefined;
+    for (const [extra, reason] of [
+      [{ expectedAudience: 'merchant' }, 'missing_audience'],
+      [{ expectedNonce: 'n-1' }, 'missing_nonce'],
+      [{ maxPresentationAgeSec: 60, now: new Date(((iat ?? 0) + 3600) * 1000) }, iat === undefined ? 'not_presented' : 'stale'],
+    ] as const) {
+      const r = await verifyAp2Chain(s, { ...o, ...extra });
+      expect(r.valid).toBe(false);
+      expect(r.error).toMatchObject({ ap2Error: 'invalid_credential', reason });
+    }
+    if (iat !== undefined) expect((await verifyAp2Chain(s, { ...o, maxPresentationAgeSec: 60, now: new Date(iat * 1000) })).valid).toBe(true);
+  });
+
   it('a flipped signature byte or a collapsed ~~ fails', async () => {
     const v = pr307.vectors.find((x: { id: string }) => x.id === 'single-hop-payment-chain');
     const o = { trustedIssuers: [{ jwk: v.root_public_jwk }], now: at };
@@ -417,6 +436,16 @@ describe('Phase 3 review fixes', () => {
     expect(r.error?.message).toContain('decoy');
     // The chain itself is sound.
     expect((await verifyAp2Chain(v.chain, base())).valid).toBe(true);
+  });
+
+  it("S-60: an AP2 SDK human-present mandate (root-only) is fresh by its iat, and can't meet an expected aud", async () => {
+    const v = V['hp-checkout'];
+    const o = base({ checkoutJwt: v.checkout_jwt });
+    expect((await verifyAp2Mandate(v.chain, { ...o, maxPresentationAgeSec: 300 })).valid).toBe(true);
+    const later = new Date(o.now!.getTime() + 3600_000);
+    expect((await verifyAp2Mandate(v.chain, { ...o, maxPresentationAgeSec: 300, now: later })).error).toMatchObject({ reason: 'stale' });
+    expect((await verifyAp2Mandate(v.chain, { ...o, now: later })).valid).toBe(true); // no limit: dispute-time checks
+    expect((await verifyAp2Mandate(v.chain, { ...o, expectedAudience: 'merchant' })).error).toMatchObject({ reason: 'missing_audience' });
   });
 
   it('S-53: says who signed the closed mandate', async () => {
