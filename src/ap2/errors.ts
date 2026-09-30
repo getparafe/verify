@@ -9,7 +9,7 @@ export type Ap2ErrorCode = 'invalid_credential' | 'unresolved_constraint' | 'inv
  * (`signature`, `untrusted_issuer`, `binding_mismatch`, `missing_audience`,
  * `audience_mismatch`, `nonce_mismatch`, `expired`, `withheld_disclosure`,
  * `unknown_constraint`, `constraint_failed`, `checkout_hash_mismatch`,
- * `transaction_id_mismatch`, `wrong_vct`, `chain_shape`, ...);
+ * `transaction_id_mismatch`, `wrong_vct`, `chain_shape`, `not_presented`, ...);
  * `violations` lists every failed constraint.
  */
 export class Ap2MandateError extends VerifyError {

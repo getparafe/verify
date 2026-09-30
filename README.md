@@ -93,7 +93,7 @@ Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJW
 
 **AP2 mandates (0.5.0).** `verifyAp2Mandate(chain, opts)` verifies an AP2 v0.2 Checkout or Payment Mandate as presented: the `~~`-joined Delegate SD-JWT chain, offline, against the issuers you trust (`trustedIssuers`: your Credential Providers or Agent Providers, as public JWKs). It checks:
 - the root's signature against the trust list, then every hop's signature against the previous hop's `cnf.jwk`, `sd_hash`/`issuer_jwt_hash` bindings, `typ`, and `exp`/`iat`/`nbf`;
-- the terminal hop's `aud` and `nonce`: required, and equal to `expectedAudience`/`expectedNonce` when you pass them;
+- the terminal hop's `aud` and `nonce`: required, and equal to `expectedAudience`/`expectedNonce` when you pass them. A root-only chain (the issuer signed the closed mandate; no key-binding hop) has neither: it is valid when you expect nothing, and fails if you pass `expectedAudience` or `expectedNonce` (0.5.1). `maxPresentationAgeSec` limits the terminal hop's `iat`, or a root-only chain's own `iat`;
 - the exact `vct` (`mandate.checkout.1`, `mandate.checkout.open.1`, `mandate.payment.1`, `mandate.payment.open.1`): open mandates, then one closed mandate, one family;
 - claims set in an open mandate reach the closed mandate unchanged, and no constraint (or other claim of an open mandate) is withheld;
 - every v0.2 constraint (`checkout.allowed_merchants`, `checkout.line_items` by maximum flow, `payment.amount_range`, `payment.budget`, `payment.agent_recurrence`, `payment.allowed_payees`, `payment.allowed_payment_instruments`, `payment.allowed_pisps`, `payment.execution_date`, `payment.reference`); unknown constraints fail;
