@@ -27,6 +27,8 @@ export interface VerifyOptions {
 export type IdentityAssurance =
   | 'registered'
   | 'self_registered'
+  // Self-registered, then approved by a signed-in person through a claim link (broker Phase 1.5).
+  | 'claimed'
   // Some broker paths set these too; accept them as opaque strings rather than narrowing further.
   | (string & {});
 
