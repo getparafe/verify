@@ -32,6 +32,8 @@ npm run typecheck      # TS strict mode
 npm run fixtures:generate  # Regenerate fixtures against a broker
 ```
 
+**Releasing:** bump `version` in package.json, push, then publish a GitHub release tagged `v<version>` (ask Faris first). `.github/workflows/publish.yml` publishes to npm via trusted publishing (no npm token, no 2FA), with provenance. It refuses a tag that doesn't match package.json.
+
 ## Key Design Decisions
 
 - **Single isomorphic implementation** — `jose` for JWTs + `@noble/ed25519` for raw receipt sigs. Works in Node 18+ and all modern browsers without polyfills.
