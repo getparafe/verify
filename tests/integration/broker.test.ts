@@ -20,6 +20,7 @@ import {
 } from '../../src/verify.js';
 import { verifyIdentityCredential } from '../../src/identity-credential.js';
 import { verifyPresentationProof } from '../../src/presentation.js';
+import { verifyActionReceipt, verifyIndexAck, verifySessionIndex, consentRef } from '../../src/action-receipt.js';
 import type { ConsentClaims, ReceiptV2Payload } from '../../src/types.js';
 
 const BROKER_URL = process.env.PARAFE_TEST_BROKER_URL;
@@ -116,6 +117,18 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     const pop = await verifyPresentationProof(presentation, token, consent, { brokerUrl: BROKER_URL as string, expectedAudience: targReg.did });
     expect(pop.valid).toBe(true);
 
+    // B6: the target signs an action receipt and files it; the broker acknowledges it
+    const actionReceipt = await new SignJWT({
+      iss: targReg.did, iat: Math.floor(Date.now() / 1000), jti: randomUUID(), ver: 1, session_id: sessionId,
+      consent_ref: consentRef(token), action: 'read_profile', result: 'success', error: null,
+    }).setProtectedHeader({ alg: 'EdDSA', kid: `${targReg.did}#keys-1`, typ: 'parafe-action-receipt+jwt' }).sign(target.privateKey);
+    const filed = await post<{ acknowledgment: string }>(`/sessions/${sessionId}/action-receipts`, { receipt: actionReceipt }, targReg.credential, {
+      'Parafe-PoP': await proof(target.privateKey, { htm: 'POST', htu: `${BROKER_URL}/sessions/${sessionId}/action-receipts`, session_id: sessionId }),
+    });
+    const arResult = await verifyActionReceipt(actionReceipt, { brokerUrl: BROKER_URL as string, consentToken: token, expectedSessionId: sessionId });
+    expect(arResult.valid).toBe(true);
+    expect((await verifyIndexAck(filed.acknowledgment, { key })).valid).toBe(true);
+
     // Close as a participant (credential + proof) and verify the receipt (v2 JWS)
     const closed = await post<{ receipt: string }>('/session/close', { session_id: sessionId }, initReg.credential, {
       'Parafe-PoP': await proof(initiator.privateKey, { htm: 'POST', htu: `${BROKER_URL}/session/close`, session_id: sessionId }),
@@ -124,6 +137,9 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     expect(receiptResult.valid).toBe(true);
     expect((receiptResult.claims as ReceiptV2Payload).session_id).toBe(sessionId);
     expect((receiptResult.claims as ReceiptV2Payload).consent_tokens[0]?.exclusions).toEqual(['delete_profile']);
+    const index = await verifySessionIndex(receiptResult.claims as ReceiptV2Payload, { receipts: [actionReceipt], acknowledgments: [filed.acknowledgment], key });
+    expect(index.valid).toBe(true);
+    expect(index.listed[0]?.seq).toBe(1);
 
     // Tampering is caught
     const [h, p, sig] = closed.receipt.split('.');

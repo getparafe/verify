@@ -26,6 +26,20 @@ export {
 export { verifyReceiptJWS, RECEIPT_TYP } from './receipt-jws.js';
 export { verifyPresentationProof, type PresentationProofOptions, type PresentationProofResult } from './presentation.js';
 export { verifyIdentityCredential, matchAgentKey, IDENTITY_VCT } from './identity-credential.js';
+export {
+  verifyActionReceipt,
+  verifyIndexAck,
+  verifySessionIndex,
+  receiptHash,
+  consentRef,
+  entryHash,
+  ACTION_RECEIPT_TYP,
+  INDEX_ACK_TYP,
+  ACTION_ERROR_CODES,
+  type ActionReceiptOptions,
+  type SessionIndexOptions,
+  type SessionIndexResult,
+} from './action-receipt.js';
 
 export {
   verifyCredential,
@@ -62,6 +76,9 @@ export type {
   ReceiptConsentToken,
   ReceiptV2Payload,
   ReceiptV2ConsentToken,
+  ReceiptV2Action,
+  ActionReceiptClaims,
+  IndexAckClaims,
   IdentityCredentialClaims,
   IdentityAssurance,
   AuthorizationModality,

@@ -65,6 +65,12 @@ verifyReceipt   (input: string | object, opts: VerifyOptions): Promise<VerifyRes
 verifyIdentityCredential(sdJwt: string, opts: VerifyOptions): Promise<VerifyResult<IdentityCredentialClaims>>
 verifyPresentationProof(proof, consentToken, consentClaims, opts?): Promise<{ valid, jti?, mid?, error? }>
 matchAgentKey(credentialClaims, ap2OpenMandate): Promise<boolean>
+
+// Since 0.4.0 (action receipts and the session index)
+verifyActionReceipt(jws, opts?: ActionReceiptOptions): Promise<VerifyResult<ActionReceiptClaims>>
+verifyIndexAck(jws, opts: VerifyOptions): Promise<VerifyResult<IndexAckClaims>>
+verifySessionIndex(sessionReceiptClaims, { receipts?, acknowledgments?, key? }): Promise<SessionIndexResult>
+receiptHash(jws) / consentRef(consentToken) / entryHash(seq, receiptHash, prev)
 ```
 
 Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJWT`, `verifySignedReceipt` (v1), `verifyReceiptJWS` (v2).
@@ -74,6 +80,11 @@ Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJW
 **Presentation proofs.** A key-bound consent token is only as good as the proof that comes with it. When an initiator presents a token, it attaches a short JWT signed with its key. `verifyPresentationProof` checks it against the token's `cnf.jkt` (fetching the initiator's key from its DID document, or taking `initiatorKey`), that it's for this token (`ath`) and for you (`aud`, `expectedAudience`), and fresh (5 minutes). Remember the returned `jti` for 5 minutes and refuse repeats.
 
 **Identity credential (SD-JWT VC).** `verifyIdentityCredential` checks the broker's signature, `vct`, expiry and every disclosure; `cnf.jwk` is the agent's registered key; `owner`/`owner_id` appear only when disclosed; `org_domain` only for domain-verified orgs. `matchAgentKey(claims, mandate)` answers "does this AP2 open mandate's key belong to this Parafé-verified agent?" by RFC 7638 thumbprint. It does **not** verify the mandate itself.
+
+**Action receipts and the session index (0.4.0).** The agent that performs or refuses an action signs an *action receipt* (a JWS with its own registered key, `typ: parafe-action-receipt+jwt`, `kid` = `<agent DID>#keys-1`) naming the action, `result` (`success` or `error`, with an error code such as `excluded`) and the consent token it acted under (`consent_ref` = base64url SHA-256 of the token). Either participant files it with the broker, which chains it per session and returns a signed *index acknowledgment* (`typ: parafe-index-ack+jwt`). The session receipt's `actions` lists every filed receipt by hash, and `chain_head` commits to the list.
+- `verifyActionReceipt` checks the agent's signature with the key in its DID document (fetched from `brokerUrl`, or pass `issuerKey`); `consentToken` and `expectedSessionId` bind it to your session.
+- `verifyIndexAck` checks the broker's signature and that `entry_hash` recomputes.
+- `verifySessionIndex(claims, { receipts, acknowledgments, key })`, after `verifyReceipt`, recomputes `chain_head` from `actions` (`entry_hash` = base64url SHA-256 of `"<seq>|<receipt_hash>|<prev>"`, `prev` empty for the first), reports where each receipt you hold is listed (`listed[i].seq`, `null` if it isn't) and checks each acknowledgment matches its entry. A receipt you hold that isn't listed fails the check: it was never filed.
 
 **No W3C Verifiable Credentials (0.2.0).** The broker used to also return `*_vdc` fields. They didn't verify with standard W3C VC libraries, so the broker stopped issuing them on 2026-09-29 and this package no longer verifies them (`FORMAT_UNKNOWN`, with a message saying so). The standard format is now the SD-JWT VC above.
 

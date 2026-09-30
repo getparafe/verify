@@ -1,7 +1,7 @@
 import type { VerifyError } from './errors.js';
 import type { PublicKeySource } from './keys.js';
 
-export type ArtifactFormat = 'jwt' | 'receipt' | 'receipt-jws' | 'sd-jwt';
+export type ArtifactFormat = 'jwt' | 'receipt' | 'receipt-jws' | 'sd-jwt' | 'action-receipt' | 'index-ack';
 
 export interface VerifyResult<T> {
   valid: boolean;
@@ -151,9 +151,65 @@ export interface ReceiptV2Payload {
   };
   handshake: { mutual_auth_completed: boolean; completed_at: string; context_hash: string | null };
   consent_tokens: ReceiptV2ConsentToken[];
-  actions: unknown[];
+  /** B6: every receipt filed in the session's index, in chain order. */
+  actions: ReceiptV2Action[];
+  /** entry_hash of the last action, or null when none was filed. */
   chain_head: string | null;
   session: { started_at: string; closed_at: string; closed_by: string | null; status: string };
+}
+
+/** A session receipt's entry for a filed receipt (B6). */
+export interface ReceiptV2Action {
+  seq: number;
+  /** base64url(SHA-256(<receipt JWS>)). */
+  receipt_hash: string;
+  kind: 'parafe.action_receipt' | 'ap2.checkout_receipt' | 'ap2.payment_receipt' | (string & {});
+  /** The receipt's issuer: an agent DID, or an AP2 receipt's iss. */
+  iss: string;
+  /** false: an AP2 receipt no participant's registered key verifies. */
+  issuer_verified: boolean;
+  action: string;
+  result: 'success' | 'error';
+  error: string | null;
+}
+
+// ─────────────── Action receipt and index acknowledgment (B6) ───────────────
+
+export interface ActionReceiptClaims {
+  /** The acting agent's DID. */
+  iss: string;
+  iat: number;
+  jti: string;
+  ver: 1;
+  session_id: string;
+  /** base64url(SHA-256(<consent token JWS>)). */
+  consent_ref: string;
+  action: string;
+  result: 'success' | 'error';
+  error: 'not_permitted' | 'excluded' | 'consent_invalid' | 'consent_expired' | 'proof_invalid' | 'failed' | null;
+  error_description?: string | null;
+  request_ref?: string | null;
+  details_hash?: string | null;
+  business_ref?: string | null;
+  mandate_ref?: string | null;
+}
+
+export interface IndexAckClaims {
+  /** The broker DID. */
+  iss: string;
+  iat: number;
+  jti: string;
+  ver: 1;
+  session_id: string;
+  seq: number;
+  receipt_hash: string;
+  kind: string;
+  /** The filed receipt's issuer. */
+  receipt_iss: string;
+  issuer_verified: boolean;
+  prev: string | null;
+  entry_hash: string;
+  indexed_at: string;
 }
 
 // ─────────────── Identity credential (SD-JWT VC, since 2026-09-30) ───────────────
