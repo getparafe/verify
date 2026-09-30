@@ -42,6 +42,26 @@ export {
 } from './action-receipt.js';
 
 export {
+  verifyAp2Mandate,
+  verifyAp2Chain,
+  ap2MandateReferences,
+} from './ap2/mandate.js';
+export { Ap2MandateError, type Ap2ErrorCode } from './ap2/errors.js';
+export { merchantMatches, lineItemsSatisfied } from './ap2/constraints.js';
+export {
+  AP2_VCT,
+  type Ap2MandateFamily,
+  type Ap2TrustedIssuer,
+  type Ap2MandateContext,
+  type Ap2ChainOptions,
+  type Ap2MandateOptions,
+  type Ap2ChainResult,
+  type Ap2ChainSegmentInfo,
+  type Ap2MandateResult,
+  type Ap2MandateReferences,
+} from './ap2/types.js';
+
+export {
   verifyCredential,
   verifyConsent,
   verifyReceipt,

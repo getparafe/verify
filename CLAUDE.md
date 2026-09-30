@@ -16,6 +16,7 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/presentation.ts` — presentation proof (B7) verification against a consent token's `cnf.jkt`.
 - `src/action-receipt.ts` — B6: action receipts (agent-signed, key from the agent's DID document), index acknowledgments (broker-signed) and `verifySessionIndex` (the session receipt's `actions` recompute to `chain_head`; held receipts are listed).
 - `src/identity-credential.ts` — SD-JWT VC identity credential; `matchAgentKey`.
+- `src/ap2/` — AP2 v0.2 mandates (change request A1): `sdjwt.ts` (Delegate SD-JWT chain parsing on OWF `@sd-jwt/decode` plus a strict disclosure pass), `constraints.ts` (every v0.2 constraint), `mandate.ts` (`verifyAp2Chain`, `verifyAp2Mandate`, `ap2MandateReferences`), `errors.ts` (AP2 error codes).
 - `src/jwt-verify.ts` — Credential + consent JWT verification via jose.
 - `src/receipt-verify.ts` — v1 receipts: raw Ed25519 verification of canonicalized receipt JSON.
 - `src/verify.ts` — Auto-detect façade.
@@ -24,6 +25,7 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `tests/unit/` — vitest unit tests against committed fixtures.
 - `tests/integration/` — vitest integration tests against staging broker.
 - `tests/fixtures/` — Committed artifacts: two production v1 receipts (verified against production's Ed25519 key), a set of v2 artifacts with their JWKS from a local Phase 1 broker, and `broker-phase2-artifacts.json` (action receipts, acknowledgments, a session receipt listing them, DID documents) from a local Phase 2 broker.
+- `tests/fixtures/ap2-*.json` — AP2 vectors: `ap2-sdk-vectors.json` (minted and verified by the AP2 Python SDK; regenerate with `tests/scripts/generate-ap2-vectors.py`, instructions inside), the spec's encoded examples, and AP2 PR #307's golden vectors.
 - `tests/scripts/generate-fixtures.ts` — Regenerates fixtures from a running broker. `generate-phase2-fixtures.ts` writes the Phase 2 fixture (`npx tsx`).
 
 ## Running

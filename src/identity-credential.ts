@@ -1,9 +1,11 @@
-import { jwtVerify, decodeJwt, calculateJwkThumbprint, type JWK } from 'jose';
+import { jwtVerify, calculateJwkThumbprint, type JWK } from 'jose';
 import { sha256 } from '@noble/hashes/sha256';
 import { MalformedArtifactError, VerifyError, InvalidSignatureError } from './errors.js';
 import { brokerKeyFor } from './internal/broker-key.js';
 import { coerceJoseError } from './jwt-verify.js';
 import type { IdentityCredentialClaims, VerifyOptions, VerifyResult } from './types.js';
+import { splitChain, parseSegment, cnfJwk } from './ap2/sdjwt.js';
+import type { Ap2MandateResult } from './ap2/types.js';
 
 export const IDENTITY_VCT = 'https://parafe.ai/vct/agent-identity/1';
 
@@ -73,19 +75,32 @@ export async function verifyIdentityCredential(
 /**
  * Does an AP2 open mandate's key belong to this Parafé agent? Compares the
  * RFC 7638 thumbprint of the credential's `cnf.jwk` (the agent's registered key)
- * with the mandate's `cnf.jwk`.
+ * with the mandate's agent key.
  *
  * `credential` is the verified claims from `verifyIdentityCredential`. `mandate`
- * is the AP2 open mandate (SD-JWT string or its decoded payload). This does NOT
- * verify the mandate: check its signature and chain separately.
+ * is one of: a `verifyAp2Mandate` result (its `agentKey`); an AP2 mandate or
+ * chain as presented (the last disclosed open mandate's `cnf.jwk`, else the
+ * root's `cnf.jwk`); or decoded mandate content with `cnf.jwk`. A string is
+ * NOT verified here: use `verifyAp2Mandate` for that.
  */
 export async function matchAgentKey(
   credential: Pick<IdentityCredentialClaims, 'cnf'>,
-  mandate: string | { cnf?: { jwk?: JWK } }
+  mandate: string | { cnf?: { jwk?: JWK } } | Pick<Ap2MandateResult, 'agentKey'>
 ): Promise<boolean> {
-  const mandateClaims = typeof mandate === 'string' ? decodeJwt(mandate.split('~')[0] ?? '') : mandate;
+  let key: JWK | undefined;
+  if (typeof mandate === 'string') {
+    try {
+      const segs = splitChain(mandate.endsWith('~') ? mandate : `${mandate}~`).map((raw, i) => parseSegment(raw, i));
+      for (const s of segs) key = cnfJwk(s) ?? key;
+    } catch {
+      key = undefined;
+    }
+  } else if ('agentKey' in mandate) {
+    key = mandate.agentKey;
+  } else {
+    key = (mandate as { cnf?: { jwk?: JWK } }).cnf?.jwk;
+  }
   const a = credential.cnf?.jwk;
-  const b = (mandateClaims as { cnf?: { jwk?: JWK } }).cnf?.jwk;
-  if (!a || !b) return false;
-  return (await calculateJwkThumbprint(a)) === (await calculateJwkThumbprint(b));
+  if (!a || !key) return false;
+  return (await calculateJwkThumbprint(a)) === (await calculateJwkThumbprint(key));
 }

@@ -71,6 +71,11 @@ verifyActionReceipt(jws, opts?: ActionReceiptOptions): Promise<VerifyResult<Acti
 verifyIndexAck(jws, opts: VerifyOptions): Promise<VerifyResult<IndexAckClaims>>
 verifySessionIndex(sessionReceiptClaims, { receipts?, acknowledgments?, key? }): Promise<SessionIndexResult>
 receiptHash(jws) / consentRef(consentToken) / entryHash(seq, receiptHash, prev)
+
+// Since 0.5.0 (AP2 v0.2 mandates)
+verifyAp2Mandate(chain, opts: Ap2MandateOptions): Promise<Ap2MandateResult>
+verifyAp2Chain(chain, opts: Ap2ChainOptions): Promise<Ap2ChainResult>
+ap2MandateReferences(chain): { sdHash, closedJwt }
 ```
 
 Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJWT`, `verifySignedReceipt` (v1), `verifyReceiptJWS` (v2).
@@ -85,6 +90,20 @@ Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJW
 - `verifyActionReceipt` checks the agent's signature with the key in its DID document (fetched from `brokerUrl`, or pass `issuerKey`); `consentToken` and `expectedSessionId` bind it to your session.
 - `verifyIndexAck` checks the broker's signature and that `entry_hash` recomputes.
 - `verifySessionIndex(claims, { receipts, acknowledgments, key })`, after `verifyReceipt`, recomputes `chain_head` from `actions` (`entry_hash` = base64url SHA-256 of `"<seq>|<receipt_hash>|<prev>"`, `prev` empty for the first), reports where each receipt you hold is listed (`listed[i].seq`, `null` if it isn't) and checks each acknowledgment matches its entry. A receipt you hold that isn't listed fails the check: it was never filed.
+
+**AP2 mandates (0.5.0).** `verifyAp2Mandate(chain, opts)` verifies an AP2 v0.2 Checkout or Payment Mandate as presented: the `~~`-joined Delegate SD-JWT chain, offline, against the issuers you trust (`trustedIssuers`: your Credential Providers or Agent Providers, as public JWKs). It checks:
+- the root's signature against the trust list, then every hop's signature against the previous hop's `cnf.jwk`, `sd_hash`/`issuer_jwt_hash` bindings, `typ`, and `exp`/`iat`/`nbf`;
+- the terminal hop's `aud` and `nonce`: required, and equal to `expectedAudience`/`expectedNonce` when you pass them;
+- the exact `vct` (`mandate.checkout.1`, `mandate.checkout.open.1`, `mandate.payment.1`, `mandate.payment.open.1`): open mandates, then one closed mandate, one family;
+- claims set in an open mandate reach the closed mandate unchanged, and no constraint (or other claim of an open mandate) is withheld;
+- every v0.2 constraint (`checkout.allowed_merchants`, `checkout.line_items` by maximum flow, `payment.amount_range`, `payment.budget`, `payment.agent_recurrence`, `payment.allowed_payees`, `payment.allowed_payment_instruments`, `payment.allowed_pisps`, `payment.execution_date`, `payment.reference`); unknown constraints fail;
+- `checkout_hash` against the Checkout JWT (disclosed, or `checkoutJwt`), and a payment's `transaction_id` against the checkout (`checkoutJwt`, `checkoutHash`, or the verified checkout mandate as `checkout`, which also supplies `payment.reference`'s open checkout hashes).
+
+A failure's `error.ap2Error` is the AP2 code for your Checkout or Payment Receipt (`invalid_credential`, `unresolved_constraint`, `invalid_mandate`); `error.reason` is more specific. `references` gives a receipt's `reference` both ways until AP2 settles it (`sdHash`, per the spec; `closedJwt`, per the AP2 SDK), even for a mandate that failed, so a rejection receipt can be issued. `payment.budget` and `payment.agent_recurrence` need `context` (`totalAmount`, `totalUses`, `lastUsedAt`), which only the verifier that tracks the mandate has. Verification is stateless: refusing a second presentation of the same closed mandate needs a record (the broker's `POST /ap2/mandates/verify` keeps one).
+
+Stricter than the AP2 Python SDK where AP2 has open issues: merchants and payees match by `id` only (#315); instruments by `id` and `type` (#320); an empty `acceptable_items` matches nothing and quantities must be filled exactly (#298); a terminal hop without `aud`/`nonce` fails whatever you expect (#319); `checkout_hash` is always checked against the Checkout JWT presented (#358); a withheld constraint fails (#339); recurrence checks the frequency, not only the count. Checked against the AP2 SDK's own vectors, the spec's encoded examples and the golden vectors of AP2 PR #307. SD-JWT parsing and disclosure resolution use the OpenWallet Foundation's `@sd-jwt/decode`; an extra strict pass refuses unreferenced or duplicate disclosures, which that library ignores.
+
+`matchAgentKey(credential, mandate)` also takes a `verifyAp2Mandate` result or a presented chain (the last open mandate's `cnf.jwk`).
 
 **No W3C Verifiable Credentials (0.2.0).** The broker used to also return `*_vdc` fields. They didn't verify with standard W3C VC libraries, so the broker stopped issuing them on 2026-09-29 and this package no longer verifies them (`FORMAT_UNKNOWN`, with a message saying so). The standard format is now the SD-JWT VC above.
 

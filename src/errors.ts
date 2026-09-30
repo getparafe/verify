@@ -10,6 +10,7 @@ export type VerifyErrorCode =
   | 'WRONG_ARTIFACT_TYPE'
   | 'KEY_NOT_FOUND'
   | 'PROOF_INVALID'
+  | 'AP2_MANDATE_INVALID'
   | 'NOT_IMPLEMENTED';
 
 export class VerifyError extends Error {
