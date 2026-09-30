@@ -9,6 +9,7 @@ import {
   VerifyError,
 } from './errors.js';
 import type { CredentialClaims, ConsentClaims, VerifyOptions, VerifyResult } from './types.js';
+import { brokerKeyFor } from './internal/broker-key.js';
 
 const DEFAULT_JWT_ISSUER = 'parafe-trust-broker';
 
@@ -22,33 +23,39 @@ async function verifyJwtInner<T>(
   validateClaims: (payload: Record<string, unknown>) => void
 ): Promise<VerifyResult<T>> {
   const expectedIssuer = opts.expectedIssuer ?? DEFAULT_JWT_ISSUER;
-  const resolved = await opts.key.resolve();
   const verifiedAt = (opts.now ?? new Date()).toISOString();
+  // The broker signs ES256 since 2026-09-30 (kid in the header); EdDSA before.
+  let keyId: string | undefined;
 
   const verifyOpts: Parameters<typeof jwtVerify>[2] = {
-    algorithms: ['EdDSA'],
+    algorithms: ['ES256', 'EdDSA'],
     issuer: expectedIssuer,
   };
   if (opts.clockToleranceSec !== undefined) verifyOpts.clockTolerance = opts.clockToleranceSec;
   if (opts.now !== undefined) verifyOpts.currentDate = opts.now;
 
   try {
-    const { payload } = await jwtVerify(token, resolved.josePublicKey, verifyOpts);
+    const { payload } = await jwtVerify(token, async (header) => {
+      const found = await brokerKeyFor(opts.key, header);
+      keyId = found.keyId;
+      return found.key;
+    }, verifyOpts);
     validateClaims(payload as Record<string, unknown>);
     return {
       valid: true,
       claims: payload as unknown as T,
       format: 'jwt',
-      keyId: resolved.keyId,
+      keyId,
       verifiedAt,
     };
   } catch (err) {
+    if (err instanceof VerifyError && (err.code === 'KEY_FETCH_FAILED' || err.code === 'KEY_PIN_MISMATCH')) throw err;
     const error = coerceJoseError(err, token, expectedIssuer);
-    return { valid: false, error, format: 'jwt', keyId: resolved.keyId, verifiedAt };
+    return { valid: false, error, format: 'jwt', keyId, verifiedAt };
   }
 }
 
-function coerceJoseError(err: unknown, token: string, expectedIssuer: string): VerifyError {
+export function coerceJoseError(err: unknown, token: string, expectedIssuer: string): VerifyError {
   if (err instanceof VerifyError) return err;
   if (err instanceof joseErrors.JWTExpired) {
     try {
@@ -118,6 +125,12 @@ function assertConsentShape(payload: Record<string, unknown>): void {
   if (typeof payload.session_id !== 'string') {
     throw new MalformedArtifactError('Consent "session_id" must be a string', 'session_id');
   }
+  // Consent token v2 names the claim `exclusions`; older tokens `excluded`.
+  // Report both, so no caller silently sees "nothing excluded".
+  const exclusions = payload.exclusions ?? payload.excluded ?? [];
+  if (!Array.isArray(exclusions)) throw new MalformedArtifactError('Consent "exclusions" must be an array', 'exclusions');
+  payload.exclusions = exclusions;
+  payload.excluded = payload.excluded ?? exclusions;
 }
 
 export async function verifyCredentialJWT(

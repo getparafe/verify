@@ -1,7 +1,7 @@
 /**
  * End-to-end integration test: runs a full handshake against a real Parafe broker,
  * captures every artifact, and verifies each of them with @getparafe/verify — fully
- * offline after the initial /public-key fetch.
+ * offline after the initial key fetch (the broker JWKS).
  *
  * Run against staging:
  *   PARAFE_TEST_BROKER_URL=https://parafe-staging.up.railway.app npm run test:integration
@@ -10,13 +10,17 @@
  * A2A extension's convention.
  */
 import { describe, it, expect } from 'vitest';
-import { generateKeyPairSync, sign as nodeSign, type KeyObject } from 'node:crypto';
+import { generateKeyPairSync, sign as nodeSign, randomUUID, createHash, type KeyObject } from 'node:crypto';
+import { SignJWT } from 'jose';
 import { createPublicKeySource } from '../../src/keys.js';
 import {
   verifyCredential,
   verifyConsent,
   verifyReceipt,
 } from '../../src/verify.js';
+import { verifyIdentityCredential } from '../../src/identity-credential.js';
+import { verifyPresentationProof } from '../../src/presentation.js';
+import type { ConsentClaims, ReceiptV2Payload } from '../../src/types.js';
 
 const BROKER_URL = process.env.PARAFE_TEST_BROKER_URL;
 const suite = BROKER_URL ? describe : describe.skip;
@@ -32,8 +36,15 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     return nodeSign(null, Buffer.from(challengeHex, 'hex'), privateKey).toString('base64');
   }
 
-  async function post<T>(path: string, body: unknown, bearer?: string): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // B7: a proof of possession signed with the agent's key, bound to the request.
+  function proof(privateKey: KeyObject, claims: Record<string, unknown>): Promise<string> {
+    return new SignJWT({ iat: Math.floor(Date.now() / 1000), jti: randomUUID(), ...claims })
+      .setProtectedHeader({ alg: 'EdDSA', typ: 'parafe-pop+jwt' })
+      .sign(privateKey);
+  }
+
+  async function post<T>(path: string, body: unknown, bearer?: string, extra: Record<string, string> = {}): Promise<T> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
     if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
     const res = await fetch(`${BROKER_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`${res.status} ${path}: ${await res.text()}`);
@@ -51,7 +62,7 @@ suite('integration: full handshake lifecycle against a live broker', () => {
   }
 
   async function register(apiKey: string, name: string, publicKeyBase64: string, extra: Record<string, unknown> = {}) {
-    return post<{ agent_id: string; credential: string }>(
+    return post<{ agent_id: string; did: string; credential: string; credential_sd_jwt: string }>(
       '/agents/register',
       { agent_name: `${name}-${Date.now().toString(36)}`, owner: 'Verify Integration', public_key: publicKeyBase64, ...extra },
       apiKey
@@ -72,6 +83,9 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     const credResult = await verifyCredential(initReg.credential, { key });
     expect(credResult.valid).toBe(true);
     expect(credResult.claims?.sub).toBe(initReg.agent_id);
+    const sdResult = await verifyIdentityCredential(initReg.credential_sd_jwt, { key });
+    expect(sdResult.valid).toBe(true);
+    expect(sdResult.claims?.agent_id).toBe(initReg.agent_id);
 
     // Handshake: initiator asks, target signs the challenge
     const initiate = await post<{ handshake_id: string; challenge_for_target: string }>('/handshake/initiate', {
@@ -79,6 +93,8 @@ suite('integration: full handshake lifecycle against a live broker', () => {
       target_agent_id: targReg.agent_id,
       requested_scope: 'read-profile',
       authorization: { modality: 'autonomous' },
+    }, undefined, {
+      'Parafe-PoP': await proof(initiator.privateKey, { htm: 'POST', htu: `${BROKER_URL}/handshake/initiate`, target_agent_id: targReg.agent_id, requested_scope: 'read-profile' }),
     });
     const complete = await post<{ session: { session_id: string }; consent_token: { token: string } }>('/handshake/complete', {
       handshake_id: initiate.handshake_id,
@@ -87,32 +103,41 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     });
     const sessionId = complete.session.session_id;
 
-    const consentResult = await verifyConsent(complete.consent_token.token, { key });
+    const token = complete.consent_token.token;
+    const consentResult = await verifyConsent(token, { key });
     expect(consentResult.valid).toBe(true);
-    expect(consentResult.claims?.session_id).toBe(sessionId);
-    expect(consentResult.claims?.excluded).toEqual(['delete_profile']);
+    const consent = consentResult.claims as ConsentClaims;
+    expect(consent.session_id).toBe(sessionId);
+    expect(consent.exclusions).toEqual(['delete_profile']);
+    expect(consent.initiator_proof).toBe('pop');
 
-    // Close as a participant (the agent's own credential) and verify the receipt
-    const receipt = await post<Record<string, unknown>>('/session/close', { session_id: sessionId }, initReg.credential);
-    const receiptResult = await verifyReceipt(receipt, { key });
+    // The initiator presents the token with a proof; the target checks it offline
+    const presentation = await proof(initiator.privateKey, { ath: createHash('sha256').update(token).digest('base64url'), aud: targReg.did });
+    const pop = await verifyPresentationProof(presentation, token, consent, { brokerUrl: BROKER_URL as string, expectedAudience: targReg.did });
+    expect(pop.valid).toBe(true);
+
+    // Close as a participant (credential + proof) and verify the receipt (v2 JWS)
+    const closed = await post<{ receipt: string }>('/session/close', { session_id: sessionId }, initReg.credential, {
+      'Parafe-PoP': await proof(initiator.privateKey, { htm: 'POST', htu: `${BROKER_URL}/session/close`, session_id: sessionId }),
+    });
+    const receiptResult = await verifyReceipt(closed, { key });
     expect(receiptResult.valid).toBe(true);
-    expect(receiptResult.claims?.session_id).toBe(sessionId);
-    expect(receiptResult.claims).not.toHaveProperty('receipt_vdc');
-
-    // The same receipt as @getparafe/sdk 0.3.2+ returns it: camelCase copy + `issued`
-    const sdkShaped = { receiptId: receipt['receipt_id'], signature: receipt['signature'], issued: receipt };
-    expect((await verifyReceipt(sdkShaped, { key })).valid).toBe(true);
+    expect((receiptResult.claims as ReceiptV2Payload).session_id).toBe(sessionId);
+    expect((receiptResult.claims as ReceiptV2Payload).consent_tokens[0]?.exclusions).toEqual(['delete_profile']);
 
     // Tampering is caught
-    const tampered = { ...receipt, session_id: 'sess_attacker' };
+    const [h, p, sig] = closed.receipt.split('.');
+    const claims = JSON.parse(Buffer.from(p as string, 'base64url').toString());
+    claims.session_id = 'sess_attacker';
+    const tampered = `${h}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${sig}`;
     expect((await verifyReceipt(tampered, { key })).valid).toBe(false);
   });
 
-  it('offline verification works after the public key is cached (no extra /public-key calls)', async () => {
+  it('offline verification works after the keys are cached (one JWKS fetch)', async () => {
     const calls: string[] = [];
     const fetchSpy: typeof fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes('/public-key')) calls.push(url);
+      if (url.includes('/public-key') || url.includes('/jwks.json')) calls.push(url);
       return fetch(input as string, init);
     };
     const key = createPublicKeySource({ brokerUrl: BROKER_URL as string, fetch: fetchSpy });

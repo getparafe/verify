@@ -8,6 +8,8 @@ export type VerifyErrorCode =
   | 'KEY_PIN_MISMATCH'
   | 'FORMAT_UNKNOWN'
   | 'WRONG_ARTIFACT_TYPE'
+  | 'KEY_NOT_FOUND'
+  | 'PROOF_INVALID'
   | 'NOT_IMPLEMENTED';
 
 export class VerifyError extends Error {
@@ -107,5 +109,23 @@ export class NotImplementedError extends VerifyError {
   constructor(what: string) {
     super('NOT_IMPLEMENTED', `${what} is not yet implemented`);
     this.name = 'NotImplementedError';
+  }
+}
+
+/** The artifact names a key (`kid`) the broker doesn't publish. */
+export class KeyNotFoundError extends VerifyError {
+  readonly kid: string;
+  constructor(kid: string, message?: string) {
+    super('KEY_NOT_FOUND', message ?? `The broker publishes no key with kid "${kid}"`);
+    this.name = 'KeyNotFoundError';
+    this.kid = kid;
+  }
+}
+
+/** A proof of possession (presentation proof) did not check out. */
+export class ProofInvalidError extends VerifyError {
+  constructor(message: string, cause?: unknown) {
+    super('PROOF_INVALID', message, cause);
+    this.name = 'ProofInvalidError';
   }
 }

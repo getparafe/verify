@@ -1,6 +1,6 @@
 {
   "name": "@getparafe/verify",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Offline verification of Parafe credentials, consent tokens, and receipts. No broker account required.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -42,7 +42,9 @@
     "verify",
     "ed25519",
     "jwt",
-    "vdc",
+    "es256",
+    "jwks",
+    "sd-jwt",
     "verifiable-credential",
     "agent",
     "identity",

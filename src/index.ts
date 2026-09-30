@@ -5,6 +5,9 @@ export {
   staticKey,
   pinKey,
   computeKeyThumbprint,
+  staticJwks,
+  type Jwks,
+  type ResolvedJwk,
   type PublicKeySource,
   type PublicKeySourceOptions,
   type KeyPin,
@@ -19,6 +22,10 @@ export {
 export {
   verifySignedReceipt,
 } from './receipt-verify.js';
+
+export { verifyReceiptJWS, RECEIPT_TYP } from './receipt-jws.js';
+export { verifyPresentationProof, type PresentationProofOptions, type PresentationProofResult } from './presentation.js';
+export { verifyIdentityCredential, matchAgentKey, IDENTITY_VCT } from './identity-credential.js';
 
 export {
   verifyCredential,
@@ -38,6 +45,8 @@ export {
   KeyPinningError,
   FormatDetectionError,
   WrongArtifactTypeError,
+  KeyNotFoundError,
+  ProofInvalidError,
   NotImplementedError,
   type VerifyErrorCode,
 } from './errors.js';
@@ -51,6 +60,9 @@ export type {
   ReceiptPayload,
   ReceiptParticipant,
   ReceiptConsentToken,
+  ReceiptV2Payload,
+  ReceiptV2ConsentToken,
+  IdentityCredentialClaims,
   IdentityAssurance,
   AuthorizationModality,
   PublicKeyResponse,

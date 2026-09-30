@@ -1,6 +1,6 @@
 # @getparafe/verify
 
-Standalone npm package that verifies Parafe credentials, consent tokens, and receipts offline using Parafe's Ed25519 public key. No broker API calls after bootstrap, no Parafe account required.
+Standalone npm package that verifies Parafe credentials (JWT and SD-JWT VC), consent tokens, presentation proofs and receipts (v2 JWS and v1 signed JSON) offline against Parafe's published keys (JWKS: ES256 since 2026-09-30, the retired Ed25519 key before). No broker API calls after bootstrap, no Parafe account required.
 
 This is the **neutrality proof point** — any party receiving a Parafe artifact can verify it cryptographically without trusting Parafe for the verification step.
 
@@ -10,15 +10,19 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/types.ts` — Public interfaces (claims, VerifyResult, options).
 - `src/errors.ts` — VerifyError hierarchy with stable `code`s.
 - `src/canonicalize.ts` — Deterministic JSON stringify (alphabetical key sort). Exported.
-- `src/keys.ts` — PublicKeySource abstraction: fetch+cache from broker, static keys, pinning.
+- `src/keys.ts` — PublicKeySource abstraction: fetch+cache the broker JWKS (falls back to /public-key), `staticJwks`, `staticKey` (Ed25519 only), pinning.
+- `src/internal/broker-key.ts` — picks the broker key for a JWS header (`kid`, DID-URL kid, or no kid = legacy Ed25519).
+- `src/receipt-jws.ts` — v2 receipt (JWS) verification.
+- `src/presentation.ts` — presentation proof (B7) verification against a consent token's `cnf.jkt`.
+- `src/identity-credential.ts` — SD-JWT VC identity credential; `matchAgentKey`.
 - `src/jwt-verify.ts` — Credential + consent JWT verification via jose.
-- `src/receipt-verify.ts` — Raw Ed25519 verification of receipt JSON (future).
+- `src/receipt-verify.ts` — v1 receipts: raw Ed25519 verification of canonicalized receipt JSON.
 - `src/verify.ts` — Auto-detect façade.
 - `src/internal/ed25519.ts` — Isomorphic Ed25519 via @noble/ed25519.
 - `src/internal/base64.ts` — base64 / base64url helpers.
 - `tests/unit/` — vitest unit tests against committed fixtures.
 - `tests/integration/` — vitest integration tests against staging broker.
-- `tests/fixtures/` — Committed artifact samples captured from a real broker.
+- `tests/fixtures/` — Committed artifacts: two production v1 receipts (verified against production's Ed25519 key) and a set of v2 artifacts with their JWKS from a local Phase 1 broker.
 - `tests/scripts/generate-fixtures.ts` — Regenerates fixtures from a running broker.
 
 ## Running
@@ -36,11 +40,11 @@ npm run fixtures:generate  # Regenerate fixtures against a broker
 
 ## Key Design Decisions
 
-- **Single isomorphic implementation** — `jose` for JWTs + `@noble/ed25519` for raw receipt sigs. Works in Node 18+ and all modern browsers without polyfills.
-- **Byte-for-byte parity with broker** — `canonicalize.ts` must produce identical output to the broker's receipt canonicalizer (`broker/src/routes/receipt.js`, `canonicalize`). Any drift silently breaks verification. Exported so users can verify signatures manually.
+- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests. Works in Node 18+ and all modern browsers without polyfills.
+- **Byte-for-byte parity with broker (v1 only)** — `canonicalize.ts` must produce identical output to the broker's v1 receipt canonicalizer (`broker/src/routes/receipt.js`, `canonicalizeV1`). v2 receipts are JWS: no canonicalization.
 - **VerifyResult instead of throwing** — Signature and claim failures populate `result.error` rather than throwing. Only key-fetch and key-pinning failures throw (caller can't meaningfully treat those as "signature invalid").
 - **Auto-detect format** — JWT string vs signed receipt JSON (as issued, or an SDK 0.3.2+ receipt's `issued` field) is detected from structure. Explicit variants (`verifyCredentialJWT`, `verifySignedReceipt`) exist for power users.
-- **No W3C VCs** — the broker stopped issuing `*_vdc` fields on 2026-09-29 (they failed standard VC verification), and 0.2.0 removed VDC verification. Don't add it back; the planned standard format is an SD-JWT VC credential.
+- **No W3C VCs** — the broker stopped issuing `*_vdc` fields on 2026-09-29 (they failed standard VC verification), and 0.2.0 removed VDC verification. Don't add it back; the standard format is the SD-JWT VC credential (0.3.0).
 - **Pinning by key_id and/or SHA-256 thumbprint** — Optional, layered on top of `createPublicKeySource`.
 
 ## When Making Changes

@@ -1,10 +1,12 @@
 import { FormatDetectionError } from './errors.js';
 import { verifyCredentialJWT, verifyConsentJWT } from './jwt-verify.js';
 import { verifySignedReceipt } from './receipt-verify.js';
+import { verifyReceiptJWS } from './receipt-jws.js';
 import type {
   CredentialClaims,
   ConsentClaims,
   ReceiptPayload,
+  ReceiptV2Payload,
   VerifyOptions,
   VerifyResult,
   ArtifactFormat,
@@ -72,10 +74,30 @@ export async function verifyConsent(
   return badFormat<ConsentClaims>(input, opts);
 }
 
+/**
+ * A v2 receipt: the JWS string, or an object carrying it (@getparafe/sdk 0.4's
+ * SessionReceipt, or the broker's /session/close response: `receipt` is the JWS).
+ */
+function receiptJwsOf(input: unknown): string | null {
+  if (typeof input === 'string') return input.split('.').length === 3 ? input : null;
+  if (input && typeof input === 'object') {
+    const r = (input as Record<string, unknown>)['receipt'];
+    if (typeof r === 'string' && r.split('.').length === 3) return r;
+  }
+  return null;
+}
+
+/**
+ * Verify a session receipt: v2 (a JWS, since 2026-09-30) or v1 (signed JSON,
+ * before; also inside an SDK 0.3.2+ receipt's `issued`). v2 claims come back as
+ * `ReceiptV2Payload` (format 'receipt-jws'), v1 as `ReceiptPayload` ('receipt').
+ */
 export async function verifyReceipt(
   input: string | object,
   opts: VerifyOptions
-): Promise<VerifyResult<ReceiptPayload>> {
+): Promise<VerifyResult<ReceiptPayload | ReceiptV2Payload>> {
+  const jws = receiptJwsOf(input);
+  if (jws) return verifyReceiptJWS(jws, opts);
   const receipt = signedReceiptOf(input);
   if (receipt) return verifySignedReceipt(receipt, opts);
   return badFormat<ReceiptPayload>(input, opts);

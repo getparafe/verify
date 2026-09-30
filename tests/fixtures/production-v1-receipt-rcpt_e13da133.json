@@ -1,0 +1,67 @@
+{
+  "receipt_id": "rcpt_e13da133c67f5f2c6170c0e6e79b583e",
+  "session_id": "sess_ad5a2d8e9596365a2e95b3556f1707ef",
+  "handshake_id": "hs_18b1e2c6256f38efa238024331dac30f",
+  "participants": {
+    "initiator": {
+      "agent_id": "prf_agent_7d74bbb1",
+      "agent_name": "soho-demo-alex-assistant",
+      "identity_assurance": "registered"
+    },
+    "target": {
+      "agent_id": "prf_agent_2e94bfc7",
+      "agent_name": "soho-donuts-shop",
+      "identity_assurance": "registered"
+    }
+  },
+  "handshake": {
+    "handshake_id": "hs_18b1e2c6256f38efa238024331dac30f",
+    "mutual_auth_completed": true,
+    "completed_at": "2026-09-30T02:09:40.123Z"
+  },
+  "consent_tokens": [
+    {
+      "scope": "menu-browse",
+      "permissions": [
+        "read_menu",
+        "check_hours",
+        "check_availability"
+      ],
+      "authorization": {
+        "evidence": null,
+        "modality": "autonomous"
+      },
+      "issued_at": "2026-09-30T02:09:40.130Z",
+      "expired_at": "2026-09-30T02:14:40.130Z"
+    },
+    {
+      "scope": "place-order",
+      "permissions": [
+        "read_menu",
+        "check_hours",
+        "check_availability",
+        "create_order",
+        "read_order_status",
+        "cancel_order"
+      ],
+      "authorization": {
+        "evidence": {
+          "platform": "soho-donuts demo (customer-agent/alex.ts)",
+          "timestamp": "2026-09-30T02:09:45.225Z",
+          "instruction": "Alex: order a dozen classic glazed for pickup tomorrow at 9am"
+        },
+        "modality": "attested"
+      },
+      "issued_at": "2026-09-30T02:09:45.361Z",
+      "expired_at": "2026-09-30T02:14:45.361Z"
+    }
+  ],
+  "session": {
+    "started_at": "2026-09-30T02:09:40.123Z",
+    "closed_at": "2026-09-30T02:09:50.125Z",
+    "status": "completed"
+  },
+  "signed_by": "parafe-broker",
+  "issued_at": "2026-09-30T02:09:50.125Z",
+  "signature": "2q4H+GRX8IfKfoqxY6GA12kDpgHKGfcOk4bv1yop9gpIQD1UbqRXHNr/n6S+iujWVkHoozGTz7Z41moZIa87Dw=="
+}

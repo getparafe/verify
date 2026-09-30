@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { createPublicKeySource, pinKey, staticKey, computeKeyThumbprint } from '../../src/keys.js';
 import { createTestKeyring } from '../helpers/mint.js';
 
+// A broker from before 2026-09-30: no JWKS (404), only /public-key.
 function mockFetchOk(body: unknown): typeof fetch {
-  return vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
+  return vi.fn(async (url: string) => String(url).endsWith('/.well-known/jwks.json')
+    ? new Response('{"error":"not_found"}', { status: 404 })
+    : new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
 }
 
 describe('createPublicKeySource', () => {
@@ -20,7 +23,7 @@ describe('createPublicKeySource', () => {
     const r2 = await source.resolve();
     expect(r1).toBe(r2);
     expect(r1.keyId).toBe('parafe-signing-key-v1');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // JWKS (404), then /public-key; cached after
   });
 
   it('strips trailing slash from broker URL', async () => {
