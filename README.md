@@ -46,7 +46,7 @@ Same pattern for `verifyCredential(credential, { key })` and `verifyConsent(toke
 
 1. Fetch Parafe's keys once: the JWKS at `https://api.parafe.ai/.well-known/jwks.json` (the active ES256 key and retired keys, which stay published forever). A broker from before 2026-09-30 has only `/public-key`; that's used instead.
 2. Cache them. Optionally pin by `kid` or SHA-256 thumbprint.
-3. Every artifact names its key (`kid`, or no `kid` for the pre-2026-09-30 Ed25519 key). Verification is a pure signature check against the cached key — no network call, no Parafe API.
+3. Every artifact names its key (`kid`, or no `kid` for the pre-2026-09-30 Ed25519 key). Verification is a pure signature check against the cached key — no network call, no Parafe API. If an artifact names a key the cache doesn't have yet (the broker added or rotated a key), `createPublicKeySource` refetches the JWKS once and retries, at most once a minute (`minRefetchIntervalMs`).
 
 Air-gapped? Paste the JWKS in with `staticJwks()` (or, for Ed25519-only artifacts, the key with `staticKey()`) and never touch the network.
 

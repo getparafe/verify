@@ -13,8 +13,11 @@ export async function brokerKeyFor(
 ): Promise<{ key: KeyLike | Uint8Array; keyId: string }> {
   const kid = header.kid?.includes('#') ? header.kid.split('#').pop() : header.kid;
   if (kid && source.resolveKeySet) {
-    const set = await source.resolveKeySet();
-    const found = set.find((k) => k.kid === kid) ?? (set.length === 1 && !set[0]?.jwk.x ? set[0] : undefined);
+    const pick = (set: Awaited<ReturnType<NonNullable<PublicKeySource['resolveKeySet']>>>) =>
+      set.find((k) => k.kid === kid) ?? (set.length === 1 && !set[0]?.jwk.x ? set[0] : undefined);
+    let found = pick(await source.resolveKeySet());
+    // A kid we don't have: the broker may have added a key since we fetched. Refetch once.
+    if (!found && source.refresh && (await source.refresh())) found = pick(await source.resolveKeySet());
     if (!found) throw new KeyNotFoundError(kid);
     if (header.alg && found.alg !== header.alg) throw new KeyNotFoundError(kid, `Key ${kid} is ${found.alg}, but the JWS says ${header.alg}`);
     return { key: found.josePublicKey, keyId: found.kid };

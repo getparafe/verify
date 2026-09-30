@@ -46,6 +46,27 @@ describe('broker keys by kid (B10)', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://broker.test/.well-known/jwks.json');
   });
 
+  it('refetches the JWKS once when an artifact names a kid it does not have, rate-limited', async () => {
+    const extra = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const extraJwk = { ...(extra.publicKey.export({ format: 'jwk' }) as JWK), kid: 'added-later', alg: 'ES256', status: 'active' };
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls++;
+      return new Response(JSON.stringify(calls === 1 ? fx.jwks : { keys: [...fx.jwks.keys, extraJwk] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const token = await new SignJWT({ token_type: 'consent', scope: 's', permissions: [], session_id: 's' })
+      .setProtectedHeader({ alg: 'ES256', kid: 'added-later' }).setIssuer('parafe-trust-broker').setIssuedAt().setExpirationTime('1h').sign(extra.privateKey);
+    const source = createPublicKeySource({ brokerUrl: 'https://broker.test', fetch: fetchMock, minRefetchIntervalMs: 0 });
+    await source.resolve();
+    expect((await verifyConsent(token, { key: source })).valid).toBe(true);
+    expect(calls).toBe(2);
+    calls = 0;
+    const limited = createPublicKeySource({ brokerUrl: 'https://broker.test', fetch: fetchMock });
+    await limited.resolve();
+    expect((await verifyConsent(token, { key: limited })).error?.code).toBe('KEY_NOT_FOUND');
+    expect(calls).toBe(1);
+  });
+
   it('an Ed25519-only key source reports KEY_NOT_FOUND for an ES256 artifact; an unknown kid too', async () => {
     const r = await verifyConsent(fx.consent_token, { key: staticKey(PRODUCTION_ED25519), now });
     expect(r.valid).toBe(false);

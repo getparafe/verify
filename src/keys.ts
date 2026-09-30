@@ -40,6 +40,12 @@ export interface PublicKeySource {
    * `staticKey()`, which can only verify Ed25519 artifacts.
    */
   resolveKeySet?(): Promise<ResolvedJwk[]>;
+  /**
+   * Refetch the keys now (an artifact named a kid the cache doesn't have: the
+   * broker rotated or added a key). Resolves false when a refetch isn't allowed
+   * yet (rate limit) or the source can't refetch.
+   */
+  refresh?(): Promise<boolean>;
 }
 
 export interface Jwks {
@@ -61,6 +67,8 @@ export interface PublicKeySourceOptions {
   pin?: KeyPin;
   /** Override fetch (useful for tests, edge runtimes, custom agents). */
   fetch?: typeof fetch;
+  /** Minimum time between refetches triggered by an unknown kid, in ms. Defaults to 60 s. */
+  minRefetchIntervalMs?: number;
 }
 
 const DEFAULT_BROKER_URL = 'https://api.parafe.ai';
@@ -134,6 +142,7 @@ export function createPublicKeySource(opts: PublicKeySourceOptions = {}): Public
   const ttlMs = opts.cacheTtlMs ?? DEFAULT_TTL_MS;
   const fetchImpl = opts.fetch ?? (globalThis.fetch as typeof fetch);
   const pin = opts.pin;
+  const minRefetchMs = opts.minRefetchIntervalMs ?? 60_000;
 
   interface Loaded { set: ResolvedJwk[] | null; legacy: ResolvedPublicKey | null }
   let cache: { loaded: Loaded; fetchedAt: number } | null = null;
@@ -218,6 +227,16 @@ export function createPublicKeySource(opts: PublicKeySourceOptions = {}): Public
       if (!legacy) return [];
       enforcePin(legacy, pin);
       return [{ kid: legacy.keyId, alg: 'EdDSA', status: 'active', jwk: { kty: 'OKP', crv: 'Ed25519', x: '' } as JWK, josePublicKey: legacy.josePublicKey }];
+    },
+    async refresh(): Promise<boolean> {
+      if (inflight) {
+        await inflight;
+        return true;
+      }
+      if (cache && Date.now() - cache.fetchedAt < minRefetchMs) return false;
+      cache = null;
+      await load();
+      return true;
     },
   };
 }
