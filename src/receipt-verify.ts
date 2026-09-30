@@ -42,16 +42,20 @@ export async function verifySignedReceipt(
       throw new MalformedArtifactError('Receipt "signature" must be a string', 'signature');
     }
 
-    // Strip signature + receipt_vdc (mirrors broker/src/routes/receipt.js:178-180)
+    // Strip signature + receipt_vdc (as the broker's /receipt/verify does),
     // then canonicalize and verify the Ed25519 signature.
     const message = new TextEncoder().encode(signingInputForReceipt(r));
     const signature = base64ToBytes(r['signature'] as string);
     const ok = await verifyEd25519(message, signature, resolved.rawBytes);
     if (!ok) throw new InvalidSignatureError('Receipt signature verification failed');
 
+    // S-44: return only what the signature covers (plus the signature itself).
+    // An unsigned receipt_vdc attached to a genuine receipt must not come back as
+    // "verified" claims.
+    const { receipt_vdc: _unsigned, ...signed } = r;
     return {
       valid: true,
-      claims: r as unknown as ReceiptPayload,
+      claims: signed as unknown as ReceiptPayload,
       format: 'receipt',
       keyId: resolved.keyId,
       verifiedAt,

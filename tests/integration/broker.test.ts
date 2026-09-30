@@ -10,7 +10,7 @@
  * A2A extension's convention.
  */
 import { describe, it, expect } from 'vitest';
-import { generateKeyPair, exportSPKI, SignJWT, type KeyLike } from 'jose';
+import { generateKeyPairSync, sign as nodeSign, type KeyObject } from 'node:crypto';
 import { createPublicKeySource } from '../../src/keys.js';
 import {
   verifyCredential,
@@ -22,104 +22,90 @@ const BROKER_URL = process.env.PARAFE_TEST_BROKER_URL;
 const suite = BROKER_URL ? describe : describe.skip;
 
 suite('integration: full handshake lifecycle against a live broker', () => {
-  async function freshAgent(): Promise<{ privateKey: KeyLike; publicKeyPem: string }> {
-    const { privateKey, publicKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
-    const publicKeyPem = await exportSPKI(publicKey);
-    return { privateKey, publicKeyPem };
+  function freshAgent(): { privateKey: KeyObject; publicKeyBase64: string } {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    return { privateKey, publicKeyBase64: publicKey.export({ type: 'spki', format: 'der' }).toString('base64') };
   }
 
-  async function signChallenge(privateKey: KeyLike, nonce: string, issuer: string): Promise<string> {
-    return new SignJWT({ nonce })
-      .setProtectedHeader({ alg: 'EdDSA' })
-      .setIssuedAt()
-      .setIssuer(issuer)
-      .setExpirationTime('5m')
-      .sign(privateKey);
+  // The target proves key possession by signing the broker's hex challenge.
+  function signChallenge(privateKey: KeyObject, challengeHex: string): string {
+    return nodeSign(null, Buffer.from(challengeHex, 'hex'), privateKey).toString('base64');
   }
 
-  async function post<T>(path: string, body: unknown, apiKey?: string): Promise<T> {
+  async function post<T>(path: string, body: unknown, bearer?: string): Promise<T> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['X-API-Key'] = apiKey;
+    if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
     const res = await fetch(`${BROKER_URL}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`${res.status} ${path}: ${await res.text()}`);
     return res.json() as Promise<T>;
   }
 
+  async function signupApiKey(label: string): Promise<string> {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const signup = await post<{ api_key: { key: string } }>('/auth/signup', {
+      email: `verify-${label}-${suffix}@example.com`,
+      password: 'test-password-12345',
+      name: `Verify ${label}`,
+    });
+    return signup.api_key.key;
+  }
+
+  async function register(apiKey: string, name: string, publicKeyBase64: string, extra: Record<string, unknown> = {}) {
+    return post<{ agent_id: string; credential: string }>(
+      '/agents/register',
+      { agent_name: `${name}-${Date.now().toString(36)}`, owner: 'Verify Integration', public_key: publicKeyBase64, ...extra },
+      apiKey
+    );
+  }
+
   it('verifies credentials, consent tokens, and receipts from a real broker', async () => {
     const key = createPublicKeySource({ brokerUrl: BROKER_URL as string });
+    const apiKey = await signupApiKey('integ');
 
-    // Signup
-    const suffix = Date.now();
-    const signup = await post<{ api_key: string }>('/auth/signup', {
-      email: `verify-integ-${suffix}@test.parafe.ai`,
-      password: 'test-password-12345',
-      org_name: `Verify Integ ${suffix}`,
+    const initiator = freshAgent();
+    const target = freshAgent();
+    const initReg = await register(apiKey, 'integ-initiator', initiator.publicKeyBase64);
+    const targReg = await register(apiKey, 'integ-target', target.publicKeyBase64, {
+      scope_policies: { 'read-profile': { permissions: ['read_profile'], exclusions: ['delete_profile'] } },
     });
-    const apiKey = signup.api_key;
 
-    // Register two agents
-    const initiator = await freshAgent();
-    const target = await freshAgent();
-    const initReg = await post<{ agent_id: string; credential: string; credential_vdc: unknown }>(
-      '/agents/register',
-      { agent_name: `integ-initiator-${suffix}`, owner_type: 'personal', public_key: initiator.publicKeyPem },
-      apiKey
-    );
-    const targReg = await post<{ agent_id: string; credential: string; credential_vdc: unknown }>(
-      '/agents/register',
-      { agent_name: `integ-target-${suffix}`, owner_type: 'personal', public_key: target.publicKeyPem },
-      apiKey
-    );
-
-    // Verify credential (JWT form)
     const credResult = await verifyCredential(initReg.credential, { key });
     expect(credResult.valid).toBe(true);
     expect(credResult.claims?.sub).toBe(initReg.agent_id);
 
-    // Verify credential (VDC form)
-    if (initReg.credential_vdc) {
-      const credVdcResult = await verifyCredential(initReg.credential_vdc, { key });
-      expect(credVdcResult.valid).toBe(true);
-    }
+    // Handshake: initiator asks, target signs the challenge
+    const initiate = await post<{ handshake_id: string; challenge_for_target: string }>('/handshake/initiate', {
+      initiator_credential: initReg.credential,
+      target_agent_id: targReg.agent_id,
+      requested_scope: 'read-profile',
+      authorization: { modality: 'autonomous' },
+    });
+    const complete = await post<{ session: { session_id: string }; consent_token: { token: string } }>('/handshake/complete', {
+      handshake_id: initiate.handshake_id,
+      target_credential: targReg.credential,
+      challenge_response: signChallenge(target.privateKey, initiate.challenge_for_target),
+    });
+    const sessionId = complete.session.session_id;
 
-    // Handshake
-    const initiate = await post<{ handshake_id: string; initiator_challenge: string; target_challenge: string }>(
-      '/handshake/initiate',
-      { initiator_agent_id: initReg.agent_id, target_agent_id: targReg.agent_id, scope: 'read_profile' },
-      apiKey
-    );
-    const initProof = await signChallenge(initiator.privateKey, initiate.initiator_challenge, initReg.agent_id);
-    const targProof = await signChallenge(target.privateKey, initiate.target_challenge, targReg.agent_id);
-
-    const complete = await post<{ session_id: string; consent_token: string; consent_token_vdc?: unknown }>(
-      '/handshake/complete',
-      { handshake_id: initiate.handshake_id, initiator_proof: initProof, target_proof: targProof },
-      apiKey
-    );
-
-    // Verify consent token (JWT)
-    const consentResult = await verifyConsent(complete.consent_token, { key });
+    const consentResult = await verifyConsent(complete.consent_token.token, { key });
     expect(consentResult.valid).toBe(true);
-    expect(consentResult.claims?.session_id).toBe(complete.session_id);
+    expect(consentResult.claims?.session_id).toBe(sessionId);
+    expect(consentResult.claims?.excluded).toEqual(['delete_profile']);
 
-    // Verify consent token (VDC)
-    if (complete.consent_token_vdc) {
-      const consentVdcResult = await verifyConsent(complete.consent_token_vdc, { key });
-      expect(consentVdcResult.valid).toBe(true);
-    }
-
-    // Close session + verify receipt
-    const close = await post<Record<string, unknown>>('/session/close', { session_id: complete.session_id }, apiKey);
-    const { receipt_vdc, ...receipt } = close as Record<string, unknown> & { receipt_vdc?: unknown };
-
+    // Close as a participant (the agent's own credential) and verify the receipt
+    const receipt = await post<Record<string, unknown>>('/session/close', { session_id: sessionId }, initReg.credential);
     const receiptResult = await verifyReceipt(receipt, { key });
     expect(receiptResult.valid).toBe(true);
-    expect(receiptResult.claims?.session_id).toBe(complete.session_id);
+    expect(receiptResult.claims?.session_id).toBe(sessionId);
+    expect(receiptResult.claims).not.toHaveProperty('receipt_vdc');
 
-    if (receipt_vdc) {
-      const receiptVdcResult = await verifyReceipt(receipt_vdc, { key });
-      expect(receiptVdcResult.valid).toBe(true);
-    }
+    // The same receipt as @getparafe/sdk 0.3.2+ returns it: camelCase copy + `issued`
+    const sdkShaped = { receiptId: receipt['receipt_id'], signature: receipt['signature'], issued: receipt };
+    expect((await verifyReceipt(sdkShaped, { key })).valid).toBe(true);
+
+    // Tampering is caught
+    const tampered = { ...receipt, session_id: 'sess_attacker' };
+    expect((await verifyReceipt(tampered, { key })).valid).toBe(false);
   });
 
   it('offline verification works after the public key is cached (no extra /public-key calls)', async () => {
@@ -131,19 +117,9 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     };
     const key = createPublicKeySource({ brokerUrl: BROKER_URL as string, fetch: fetchSpy });
 
-    // Mint one credential by fetching the key once, then verify N times without touching fetch again.
-    const suffix = Date.now();
-    const signup = await post<{ api_key: string }>('/auth/signup', {
-      email: `verify-offline-${suffix}@test.parafe.ai`,
-      password: 'test-password-12345',
-      org_name: `Verify Offline ${suffix}`,
-    });
-    const agent = await freshAgent();
-    const reg = await post<{ credential: string }>(
-      '/agents/register',
-      { agent_name: `offline-${suffix}`, owner_type: 'personal', public_key: agent.publicKeyPem },
-      signup.api_key
-    );
+    // Fetch the key once, then verify N times without touching fetch again.
+    const apiKey = await signupApiKey('offline');
+    const reg = await register(apiKey, 'offline', freshAgent().publicKeyBase64);
 
     await verifyCredential(reg.credential, { key });
     await verifyCredential(reg.credential, { key });

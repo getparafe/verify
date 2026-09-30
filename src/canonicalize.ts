@@ -1,6 +1,6 @@
 /**
  * Deterministic JSON canonicalization. Must produce byte-identical output to the
- * broker's canonicalizer at broker/src/crypto/vdc.js:18-25 and broker/src/routes/receipt.js:10-17.
+ * broker's receipt canonicalizer (broker/src/routes/receipt.js, `canonicalize`).
  *
  * Rules:
  * - Object keys sorted alphabetically (localeCompare) at every level.
@@ -23,17 +23,9 @@ export function canonicalize(value: unknown): string {
 }
 
 /**
- * Strip the `proof` field from a VDC and return the canonical signing input.
- * Equivalent to: canonicalize({ ...vdc, proof: undefined }) but more explicit.
- */
-export function signingInputForVDC(vdc: object): string {
-  const { proof: _proof, ...rest } = vdc as Record<string, unknown>;
-  return canonicalize(rest);
-}
-
-/**
  * Strip `signature` and `receipt_vdc` from a receipt and return the canonical
- * signing input — mirrors broker/src/routes/receipt.js:178-180.
+ * signing input, as the broker's /receipt/verify does. Receipts issued before
+ * 2026-09-29 carried a `receipt_vdc` that was never part of the signed payload.
  */
 export function signingInputForReceipt(receipt: object): string {
   const { signature: _sig, receipt_vdc: _vdc, ...rest } = receipt as Record<string, unknown>;

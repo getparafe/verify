@@ -56,6 +56,53 @@ describe('verifySignedReceipt', () => {
     const result = await verifySignedReceipt(receipt, { key: kr.keySource });
     expect(result.valid).toBe(true);
   });
+
+  it('does not return an unsigned receipt_vdc inside the verified claims (S-44)', async () => {
+    const kr = await createTestKeyring();
+    const receipt = mintSignedReceipt({ nodePrivateKey: kr.nodePrivateKey }) as Record<string, unknown>;
+    receipt['receipt_vdc'] = { forged: 'attached after signing' };
+    const result = await verifySignedReceipt(receipt, { key: kr.keySource });
+    expect(result.valid).toBe(true);
+    expect(result.claims).not.toHaveProperty('receipt_vdc');
+    expect(result.claims?.signature).toBe(receipt['signature']);
+  });
+});
+
+describe('verifyReceipt input shapes', () => {
+  it('accepts an @getparafe/sdk receipt (0.3.2+) by verifying its `issued` field', async () => {
+    const kr = await createTestKeyring();
+    const issued = mintSignedReceipt({ nodePrivateKey: kr.nodePrivateKey, receipt_id: 'rcpt_sdk_1' });
+    const sdkReceipt = { receiptId: 'rcpt_sdk_1', sessionId: 'sess_test_123', signature: issued['signature'], issued };
+    const result = await verifyReceipt(sdkReceipt, { key: kr.keySource });
+    expect(result.valid).toBe(true);
+    expect(result.claims?.receipt_id).toBe('rcpt_sdk_1');
+  });
+
+  it('rejects a tampered `issued` receipt', async () => {
+    const kr = await createTestKeyring();
+    const issued = mintSignedReceipt({ nodePrivateKey: kr.nodePrivateKey }) as Record<string, unknown>;
+    issued['session_id'] = 'sess_attacker';
+    const result = await verifyReceipt({ receiptId: 'rcpt_testabcdef', issued }, { key: kr.keySource });
+    expect(result.valid).toBe(false);
+    expect(result.error?.code).toBe('INVALID_SIGNATURE');
+  });
+
+  it('explains an SDK receipt without `issued` (SDK 0.3.1 or earlier)', async () => {
+    const kr = await createTestKeyring();
+    const result = await verifyReceipt({ receiptId: 'rcpt_old', signature: 'sig' }, { key: kr.keySource });
+    expect(result.valid).toBe(false);
+    expect(result.error?.code).toBe('FORMAT_UNKNOWN');
+    expect(result.error?.message).toContain('issued');
+  });
+
+  it('explains that W3C VC (*_vdc) artifacts are no longer verified', async () => {
+    const kr = await createTestKeyring();
+    const vc = { '@context': ['https://www.w3.org/2018/credentials/v1'], type: ['VerifiableCredential'], proof: { proofValue: 'x' } };
+    const result = await verifyReceipt(vc, { key: kr.keySource });
+    expect(result.valid).toBe(false);
+    expect(result.error?.code).toBe('FORMAT_UNKNOWN');
+    expect(result.error?.message).toContain('no longer');
+  });
 });
 
 describe('verifyReceipt (auto-detect)', () => {

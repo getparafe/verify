@@ -90,7 +90,7 @@ export class KeyPinningError extends VerifyError {
 }
 
 export class FormatDetectionError extends VerifyError {
-  constructor(message = 'Could not detect artifact format (expected JWT string, VDC object, or signed receipt)') {
+  constructor(message = 'Could not detect artifact format (expected a JWT string or a signed receipt)') {
     super('FORMAT_UNKNOWN', message);
     this.name = 'FormatDetectionError';
   }

@@ -1,7 +1,7 @@
 import type { VerifyError } from './errors.js';
 import type { PublicKeySource } from './keys.js';
 
-export type ArtifactFormat = 'jwt' | 'vdc' | 'receipt';
+export type ArtifactFormat = 'jwt' | 'receipt';
 
 export interface VerifyResult<T> {
   valid: boolean;
@@ -14,7 +14,7 @@ export interface VerifyResult<T> {
 
 export interface VerifyOptions {
   key: PublicKeySource;
-  /** Override issuer check (default: 'parafe-trust-broker' for JWTs, 'did:web:api.parafe.ai' for VDCs) */
+  /** Override issuer check (default: 'parafe-trust-broker'). */
   expectedIssuer?: string;
   /** Clock tolerance in seconds for exp/iat/nbf (default 0). */
   clockToleranceSec?: number;
@@ -25,10 +25,8 @@ export interface VerifyOptions {
 // ─────────────── Credential ───────────────
 
 export type IdentityAssurance =
-  | 'self_attested'
   | 'registered'
-  | 'claimed'
-  | 'verified'
+  | 'self_registered'
   // Some broker paths set these too; accept them as opaque strings rather than narrowing further.
   | (string & {});
 
@@ -106,31 +104,6 @@ export interface ReceiptPayload {
   signed_by: string;
   issued_at: string;
   signature: string;
-}
-
-// ─────────────── VDC shapes ───────────────
-
-export type ParafeVDCType =
-  | 'ParafeIdentityCredential'
-  | 'ParafeConsentCredential'
-  | 'ParafeReceiptCredential';
-
-export interface VDCProof {
-  type: 'Ed25519Signature2020';
-  created: string;
-  verificationMethod: string;
-  proofPurpose: 'assertionMethod' | string;
-  proofValue: string;
-}
-
-export interface VerifiableCredential<Subject = Record<string, unknown>> {
-  '@context': string[];
-  type: [string, ParafeVDCType, ...string[]];
-  issuer: string;
-  issuanceDate: string;
-  expirationDate?: string;
-  credentialSubject: Subject;
-  proof: VDCProof;
 }
 
 // ─────────────── Broker response ───────────────

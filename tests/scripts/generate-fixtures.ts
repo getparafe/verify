@@ -6,7 +6,7 @@
  *   # or against a local broker started with `npm start` from broker/:
  *   npm run fixtures:generate
  *
- * Writes tests/fixtures/{public-key.json, credential.jwt, consent.jwt, receipt.json, ...}
+ * Writes tests/fixtures/{public-key.json, credential.jwt, consent.jwt, receipt.json}
  * for integration tests. The raw artifacts can also be replayed against unit verifiers
  * as a "known-good-from-production" smoke test.
  *
@@ -16,37 +16,26 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateKeyPair, exportSPKI, SignJWT, type KeyLike } from 'jose';
-import { subtle } from 'node:crypto';
+import { generateKeyPairSync, sign as nodeSign, type KeyObject } from 'node:crypto';
 
 const BROKER_URL = (process.env.PARAFE_TEST_BROKER_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, '..', 'fixtures');
 
-interface AgentKeys {
-  privateKey: KeyLike;
-  publicKeyPem: string;
+function freshAgentKeys(): { privateKey: KeyObject; publicKeyBase64: string } {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  return { privateKey, publicKeyBase64: publicKey.export({ type: 'spki', format: 'der' }).toString('base64') };
 }
 
-async function freshAgentKeys(): Promise<AgentKeys> {
-  const { privateKey, publicKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
-  const publicKeyPem = await exportSPKI(publicKey);
-  return { privateKey, publicKeyPem };
+// The target proves key possession by signing the broker's hex challenge.
+function signChallenge(privateKey: KeyObject, challengeHex: string): string {
+  return nodeSign(null, Buffer.from(challengeHex, 'hex'), privateKey).toString('base64');
 }
 
-async function signChallenge(privateKey: KeyLike, nonce: string, issuer: string): Promise<string> {
-  return new SignJWT({ nonce })
-    .setProtectedHeader({ alg: 'EdDSA' })
-    .setIssuedAt()
-    .setIssuer(issuer)
-    .setExpirationTime('5m')
-    .sign(privateKey);
-}
-
-async function postJson(path: string, body: unknown, headers: Record<string, string> = {}): Promise<any> {
+async function postJson(path: string, body: unknown, bearer?: string): Promise<any> {
   const res = await fetch(`${BROKER_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
+    headers: { 'Content-Type': 'application/json', ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -55,8 +44,8 @@ async function postJson(path: string, body: unknown, headers: Record<string, str
   return res.json();
 }
 
-async function getJson(path: string, headers: Record<string, string> = {}): Promise<any> {
-  const res = await fetch(`${BROKER_URL}${path}`, { headers });
+async function getJson(path: string): Promise<any> {
+  const res = await fetch(`${BROKER_URL}${path}`);
   if (!res.ok) throw new Error(`${res.status} ${path}: ${await res.text()}`);
   return res.json();
 }
@@ -71,64 +60,49 @@ async function main(): Promise<void> {
   writeFileSync(join(FIXTURES_DIR, 'public-key.json'), JSON.stringify(pubKey, null, 2));
   console.log('✓ public-key.json');
 
-  // 2. Sign up a developer
-  const suffix = Date.now();
+  // 2. Sign up a developer (the starter API key registers agents)
+  const suffix = Date.now().toString(36);
   const signup = await postJson('/auth/signup', {
-    email: `verify-fixture-${suffix}@test.parafe.ai`,
+    email: `verify-fixture-${suffix}@example.com`,
     password: 'test-password-12345',
-    org_name: `Verify Fixtures ${suffix}`,
+    name: 'Verify Fixtures',
   });
-  const apiKey = signup.api_key as string;
-  const authHeader = { 'X-API-Key': apiKey };
+  const apiKey = signup.api_key.key as string;
 
   // 3. Register two agents
-  const initiator = await freshAgentKeys();
-  const target = await freshAgentKeys();
+  const initiator = freshAgentKeys();
+  const target = freshAgentKeys();
   const initReg = await postJson('/agents/register', {
-    agent_name: `initiator-${suffix}`,
-    owner_type: 'personal',
-    public_key: initiator.publicKeyPem,
-  }, authHeader);
+    agent_name: `initiator-${suffix}`, owner: 'Verify Fixtures', public_key: initiator.publicKeyBase64,
+  }, apiKey);
   const targReg = await postJson('/agents/register', {
-    agent_name: `target-${suffix}`,
-    owner_type: 'personal',
-    public_key: target.publicKeyPem,
-  }, authHeader);
+    agent_name: `target-${suffix}`, owner: 'Verify Fixtures', public_key: target.publicKeyBase64,
+    scope_policies: { 'read-profile': { permissions: ['read_profile'], exclusions: ['delete_profile'] } },
+  }, apiKey);
 
   writeFileSync(join(FIXTURES_DIR, 'credential.jwt'), initReg.credential);
-  writeFileSync(join(FIXTURES_DIR, 'credential.vdc.json'), JSON.stringify(initReg.credential_vdc, null, 2));
-  console.log('✓ credential.jwt + credential.vdc.json');
+  console.log('✓ credential.jwt');
 
   // 4. Handshake
   const initiate = await postJson('/handshake/initiate', {
-    initiator_agent_id: initReg.agent_id,
+    initiator_credential: initReg.credential,
     target_agent_id: targReg.agent_id,
-    scope: 'read_profile',
-  }, authHeader);
-
-  const initProof = await signChallenge(initiator.privateKey, initiate.initiator_challenge, initReg.agent_id);
-  const targProof = await signChallenge(target.privateKey, initiate.target_challenge, targReg.agent_id);
-
+    requested_scope: 'read-profile',
+    authorization: { modality: 'autonomous' },
+  });
   const complete = await postJson('/handshake/complete', {
     handshake_id: initiate.handshake_id,
-    initiator_proof: initProof,
-    target_proof: targProof,
-  }, authHeader);
+    target_credential: targReg.credential,
+    challenge_response: signChallenge(target.privateKey, initiate.challenge_for_target),
+  });
 
-  writeFileSync(join(FIXTURES_DIR, 'consent.jwt'), complete.consent_token);
-  if (complete.consent_token_vdc) {
-    writeFileSync(join(FIXTURES_DIR, 'consent.vdc.json'), JSON.stringify(complete.consent_token_vdc, null, 2));
-  }
-  console.log('✓ consent.jwt' + (complete.consent_token_vdc ? ' + consent.vdc.json' : ''));
+  writeFileSync(join(FIXTURES_DIR, 'consent.jwt'), complete.consent_token.token);
+  console.log('✓ consent.jwt');
 
-  // 5. Close session + capture receipt
-  const close = await postJson('/session/close', { session_id: complete.session_id }, authHeader);
-  const { receipt_vdc, ...receipt } = close;
+  // 5. Close the session as a participant + capture the receipt
+  const receipt = await postJson('/session/close', { session_id: complete.session.session_id }, initReg.credential);
   writeFileSync(join(FIXTURES_DIR, 'receipt.json'), JSON.stringify(receipt, null, 2));
-  if (receipt_vdc) {
-    writeFileSync(join(FIXTURES_DIR, 'receipt.vdc.json'), JSON.stringify(receipt_vdc, null, 2));
-  }
-  console.log('✓ receipt.json' + (receipt_vdc ? ' + receipt.vdc.json' : ''));
+  console.log('✓ receipt.json');
 
   console.log(`\nAll fixtures written to ${FIXTURES_DIR}`);
 }
@@ -137,6 +111,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
-// Quiet TS about unused subtle import on some versions
-void subtle;

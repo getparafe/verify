@@ -38,6 +38,8 @@ if (result.valid) {
 
 Same pattern for `verifyCredential(credential, { key })` and `verifyConsent(token, { key })`.
 
+`receipt` can be the receipt exactly as the broker returned it (snake_case, with `signature`), or a receipt from `@getparafe/sdk` 0.3.2+, whose signed original sits in `receipt.issued`. SDK 0.3.1 and earlier return only a camelCase copy, which can't be verified; upgrade the SDK.
+
 ## How verification works
 
 1. Fetch Parafe's Ed25519 public key once (from `https://api.parafe.ai/public-key` by default).
@@ -50,7 +52,7 @@ Air-gapped? Paste the public key in with `staticKey()` and never touch the netwo
 
 ### Verification functions
 
-All three accept either the JWT/JSON string form or the VDC object form — format is auto-detected.
+Credentials and consent tokens are JWT strings. Receipts are signed JSON objects.
 
 ```ts
 verifyCredential(input: string | object, opts: VerifyOptions): Promise<VerifyResult<CredentialClaims>>
@@ -58,14 +60,16 @@ verifyConsent   (input: string | object, opts: VerifyOptions): Promise<VerifyRes
 verifyReceipt   (input: string | object, opts: VerifyOptions): Promise<VerifyResult<ReceiptPayload>>
 ```
 
-Explicit variants exist for callers who want to skip format detection: `verifyCredentialJWT`, `verifyCredentialVDC`, `verifyConsentJWT`, `verifyConsentVDC`, `verifyReceiptVDC`, `verifySignedReceipt`.
+Explicit variants exist for callers who want to skip format detection: `verifyCredentialJWT`, `verifyConsentJWT`, `verifySignedReceipt`.
+
+**No W3C Verifiable Credentials (0.2.0).** The broker used to also return `credential_vdc`, `consent_token_vdc` and `receipt_vdc`. They didn't verify with standard W3C VC libraries, so the broker stopped issuing them on 2026-09-29 and this package no longer verifies them (`FORMAT_UNKNOWN`, with a message saying so). A standard format (the agent credential as an SD-JWT VC) is planned.
 
 ### `VerifyOptions`
 
 ```ts
 interface VerifyOptions {
   key: PublicKeySource;
-  expectedIssuer?: string;    // defaults: 'parafe-trust-broker' for JWT, 'did:web:*' for VDC
+  expectedIssuer?: string;    // default: 'parafe-trust-broker'
   clockToleranceSec?: number; // default 0
   now?: Date;                 // override current time (tests)
 }
@@ -77,7 +81,7 @@ interface VerifyOptions {
 interface VerifyResult<T> {
   valid: boolean;
   claims?: T;
-  format?: 'jwt' | 'vdc' | 'receipt';
+  format?: 'jwt' | 'receipt';
   keyId?: string;
   verifiedAt: string;
   error?: VerifyError;
@@ -91,12 +95,12 @@ Signature/claim failures populate `result.error` rather than throwing. Only key-
 | Code | When |
 |---|---|
 | `INVALID_SIGNATURE` | Signature doesn't verify against the broker's public key |
-| `EXPIRED` | Artifact past its `exp` / `expirationDate` |
-| `NOT_YET_VALID` | Artifact's `nbf` / `issuanceDate` is in the future |
-| `ISSUER_MISMATCH` | `iss` / `issuer` doesn't match the expected value |
+| `EXPIRED` | Artifact past its `exp` |
+| `NOT_YET_VALID` | Artifact's `nbf` is in the future |
+| `ISSUER_MISMATCH` | `iss` doesn't match the expected value |
 | `MALFORMED` | Required field missing or wrong type |
 | `WRONG_ARTIFACT_TYPE` | e.g. consent token passed to `verifyCredential` |
-| `FORMAT_UNKNOWN` | Input isn't a JWT string, VDC object, or signed receipt |
+| `FORMAT_UNKNOWN` | Input isn't a JWT string or a signed receipt (the message says why for W3C VC objects and pre-0.3.2 SDK receipts) |
 | `KEY_FETCH_FAILED` | (throws) — broker unreachable or returned bad data |
 | `KEY_PIN_MISMATCH` | (throws) — `key_id` or thumbprint doesn't match pinning |
 
@@ -122,7 +126,7 @@ const offline = staticKey(base64SpkiDer, 'parafe-signing-key-v1');
 
 ## Verifying signatures yourself
 
-The exported `canonicalize(obj)` produces the exact deterministic JSON string that Parafe signs. Use it with any Ed25519 library to verify signatures without this package:
+The exported `canonicalize(obj)` produces the exact deterministic JSON string that Parafe signs for receipts (strip `signature`, and `receipt_vdc` on receipts issued before 2026-09-29, first). Use it with any Ed25519 library to verify signatures without this package:
 
 ```ts
 import { canonicalize } from '@getparafe/verify/canonicalize';

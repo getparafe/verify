@@ -5,7 +5,7 @@ import { canonicalize } from '../../src/canonicalize.js';
 
 /**
  * Test keyring backed by Node's crypto module so we can exercise both the jose
- * (JWT) and node:crypto (raw Ed25519 signing used by VDCs + receipts) paths
+ * (JWT) and node:crypto (raw Ed25519 signing used by receipts) paths
  * against the same public key the real broker would expose.
  */
 export interface TestKeyring {
@@ -58,7 +58,6 @@ export async function _joseKeygen(): Promise<KeyLike> {
 void exportSPKI;
 
 const PARAFE_JWT_ISSUER = 'parafe-trust-broker';
-const PARAFE_BROKER_DID = 'did:web:api.parafe.ai';
 
 // ─────────────── JWT minting ───────────────
 
@@ -130,102 +129,8 @@ export async function mintConsent(input: MintConsentInput): Promise<string> {
     .sign(input.privateKey);
 }
 
-// ─────────────── VDC minting (matches broker/src/crypto/vdc.js exactly) ───────────────
-
 function signBroker(nodePrivateKey: KeyObject, canonicalString: string): Buffer {
   return nodeSign(null, Buffer.from(canonicalString), nodePrivateKey);
-}
-
-export interface MintIdentityVDCInput {
-  nodePrivateKey: KeyObject;
-  agent_id?: string;
-  agent_name?: string;
-  owner?: string;
-  identity_assurance?: string;
-  verification_tier?: string;
-  public_key_thumbprint?: string;
-  issuanceDate?: string;
-  expirationDate?: string;
-  issuer?: string;
-  /** If set, mutate the credential after signing (e.g., to produce tampered fixtures) */
-  mutateAfterSigning?: (vdc: Record<string, unknown>) => void;
-}
-
-export function mintIdentityVDC(input: MintIdentityVDCInput): Record<string, unknown> {
-  const credential: Record<string, unknown> = {
-    '@context': ['https://www.w3.org/2018/credentials/v1', 'https://schema.parafe.ai/v1'],
-    type: ['VerifiableCredential', 'ParafeIdentityCredential'],
-    issuer: input.issuer ?? PARAFE_BROKER_DID,
-    issuanceDate: input.issuanceDate ?? new Date().toISOString(),
-    expirationDate: input.expirationDate ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    credentialSubject: {
-      id: `${PARAFE_BROKER_DID}:agent:${input.agent_id ?? 'prf_agent_test'}`,
-      agent_id: input.agent_id ?? 'prf_agent_test',
-      agent_name: input.agent_name ?? 'Test Agent',
-      owner: input.owner ?? 'Test Org',
-      identity_assurance: input.identity_assurance ?? 'registered',
-      verification_tier: input.verification_tier ?? 'unverified',
-      public_key_thumbprint: input.public_key_thumbprint ?? 'a'.repeat(64),
-    },
-  };
-  const sig = signBroker(input.nodePrivateKey, canonicalize(credential));
-  credential['proof'] = {
-    type: 'Ed25519Signature2020',
-    created: new Date().toISOString(),
-    verificationMethod: `${credential['issuer']}#broker-key-1`,
-    proofPurpose: 'assertionMethod',
-    proofValue: sig.toString('base64url'),
-  };
-  if (input.mutateAfterSigning) input.mutateAfterSigning(credential);
-  return credential;
-}
-
-export interface MintConsentVDCInput {
-  nodePrivateKey: KeyObject;
-  scope?: string;
-  permissions?: string[];
-  excluded?: string[];
-  session_id?: string;
-  authorization_modality?: string;
-  initiator_agent_id?: string;
-  target_agent_id?: string;
-  issuanceDate?: string;
-  expirationDate?: string;
-  issuer?: string;
-}
-
-export function mintConsentVDC(input: MintConsentVDCInput): Record<string, unknown> {
-  const initiator = input.initiator_agent_id ?? 'prf_agent_initiator';
-  const target = input.target_agent_id ?? 'prf_agent_target';
-  const credential: Record<string, unknown> = {
-    '@context': ['https://www.w3.org/2018/credentials/v1', 'https://schema.parafe.ai/v1'],
-    type: ['VerifiableCredential', 'ParafeConsentCredential'],
-    issuer: input.issuer ?? PARAFE_BROKER_DID,
-    issuanceDate: input.issuanceDate ?? new Date().toISOString(),
-    expirationDate: input.expirationDate ?? new Date(Date.now() + 3600 * 1000).toISOString(),
-    credentialSubject: {
-      id: `${PARAFE_BROKER_DID}:agent:${initiator}`,
-      scope: input.scope ?? 'read_profile',
-      permissions: input.permissions ?? ['read:profile'],
-      excluded: input.excluded ?? [],
-      session_id: input.session_id ?? 'sess_test_123',
-      authorization_modality: input.authorization_modality ?? 'autonomous',
-      initiator_agent_id: initiator,
-      initiator_did: `${PARAFE_BROKER_DID}:agent:${initiator}`,
-      target_agent_id: target,
-      target_did: `${PARAFE_BROKER_DID}:agent:${target}`,
-      parent_credential_id: null,
-    },
-  };
-  const sig = signBroker(input.nodePrivateKey, canonicalize(credential));
-  credential['proof'] = {
-    type: 'Ed25519Signature2020',
-    created: new Date().toISOString(),
-    verificationMethod: `${credential['issuer']}#broker-key-1`,
-    proofPurpose: 'assertionMethod',
-    proofValue: sig.toString('base64url'),
-  };
-  return credential;
 }
 
 // ─────────────── Receipt minting (matches broker/src/routes/receipt.js) ───────────────
@@ -266,29 +171,4 @@ export function mintSignedReceipt(input: MintReceiptInput): Record<string, unkno
   const sig = signBroker(input.nodePrivateKey, canonicalize(receipt));
   receipt['signature'] = sig.toString('base64');
   return receipt;
-}
-
-export function mintReceiptVDC(input: MintReceiptInput): Record<string, unknown> {
-  // A ReceiptVDC wraps receipt data under credentialSubject and is signed via Ed25519Signature2020.
-  const receipt = mintSignedReceipt(input);
-  const { signature: _sig, ...unsigned } = receipt;
-  const credential: Record<string, unknown> = {
-    '@context': ['https://www.w3.org/2018/credentials/v1', 'https://schema.parafe.ai/v1'],
-    type: ['VerifiableCredential', 'ParafeReceiptCredential'],
-    issuer: PARAFE_BROKER_DID,
-    issuanceDate: receipt['issued_at'],
-    credentialSubject: {
-      id: `${PARAFE_BROKER_DID}:agent:prf_initiator`,
-      ...unsigned,
-    },
-  };
-  const proofSig = signBroker(input.nodePrivateKey, canonicalize(credential));
-  credential['proof'] = {
-    type: 'Ed25519Signature2020',
-    created: new Date().toISOString(),
-    verificationMethod: `${credential['issuer']}#broker-key-1`,
-    proofPurpose: 'assertionMethod',
-    proofValue: proofSig.toString('base64url'),
-  };
-  return credential;
 }

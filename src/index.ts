@@ -1,4 +1,4 @@
-export { canonicalize, signingInputForVDC, signingInputForReceipt } from './canonicalize.js';
+export { canonicalize, signingInputForReceipt } from './canonicalize.js';
 
 export {
   createPublicKeySource,
@@ -15,12 +15,6 @@ export {
   verifyCredentialJWT,
   verifyConsentJWT,
 } from './jwt-verify.js';
-
-export {
-  verifyCredentialVDC,
-  verifyConsentVDC,
-  verifyReceiptVDC,
-} from './vdc-verify.js';
 
 export {
   verifySignedReceipt,
@@ -59,8 +53,5 @@ export type {
   ReceiptConsentToken,
   IdentityAssurance,
   AuthorizationModality,
-  VerifiableCredential,
-  VDCProof,
-  ParafeVDCType,
   PublicKeyResponse,
 } from './types.js';
