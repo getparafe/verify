@@ -109,6 +109,17 @@ export interface Ap2MandateResult extends Ap2ChainResult {
   agentKey?: JWK;
   /** RFC 7638 thumbprint of `agentKey`. */
   agentKeyThumbprint?: string;
+  /**
+   * Who signed the closed mandate: `issuer` (a single SD-JWT signed by the
+   * trusted issuer), `credential_holder` (the holder of a trusted root
+   * credential, in AP2's User Credential model the user), or `open_mandate_key`
+   * (the key an open mandate endorsed: an agent). A verifier that trusts an
+   * issuer which also certifies agent keys must check `closedByKey` is not an
+   * agent's before treating a `credential_holder` mandate as the user's.
+   */
+  closedBy?: 'issuer' | 'credential_holder' | 'open_mandate_key';
+  closedByKey?: JWK;
+  closedByKeyThumbprint?: string;
   checkoutHash?: string;
   transactionId?: string;
   /** Checkout mandate: the decoded Checkout JWT payload. */

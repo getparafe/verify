@@ -6,6 +6,7 @@
 import type { JWK } from 'jose';
 import { canonicalize } from '../canonicalize.js';
 import { Ap2Failure, Ap2MandateError } from './errors.js';
+import { IDENTITY_VCT } from '../identity-credential.js';
 import {
   splitChain, parseSegment, verifySegmentSignature, cnfJwk, thumbprint, sdHash, issuerJwtHash, hashAscii,
   KB_TYP_TERMINAL, KB_TYP_INTERMEDIATE, type Segment,
@@ -94,6 +95,12 @@ async function verifyChainInternal(chain: string, opts: Ap2ChainOptions, result:
   const rootTyp = String(root.header.typ ?? '');
   if ([...KB_TYP_TERMINAL, ...KB_TYP_INTERMEDIATE].includes(rootTyp)) {
     throw new Ap2Failure('invalid_credential', 'chain_shape', 'The chain starts with a key-binding hop: the issuer-signed root is missing');
+  }
+  // S-53: Parafé's agent identity credential has the User Credential shape (a
+  // trusted root whose cnf.jwk the holder signs with), but its holder is an
+  // agent. It never stands for a user.
+  if (root.claims.vct === IDENTITY_VCT) {
+    throw new Ap2Failure('invalid_credential', 'agent_credential_root', "The chain's root is a Parafé agent identity credential: an agent's key can't sign for the user");
   }
   const issuer = await rootKey(root, opts.trustedIssuers);
   result.issuer = { jkt: await thumbprint(issuer.jwk) };
@@ -254,6 +261,19 @@ export async function checkMandate(segments: Segment[], opts: Ap2MandateOptions,
     result.agentKey = (opens[opens.length - 1]!.item!.cnf as { jwk: JWK }).jwk;
     result.agentKeyThumbprint = await thumbprint(result.agentKey);
   }
+  // Who signed the closed mandate: the root issuer itself; the holder of a root
+  // credential (User Credential model: the user's key); or the key an open
+  // mandate endorsed (an agent).
+  if (segments.length === 1) {
+    result.closedBy = 'issuer';
+  } else {
+    const key = cnfJwk(segments[segments.length - 2]!);
+    result.closedBy = opens.length ? 'open_mandate_key' : 'credential_holder';
+    if (key) {
+      result.closedByKey = key;
+      result.closedByKeyThumbprint = await thumbprint(key);
+    }
+  }
   const c = closed.item!;
 
   // #339: a withheld constraint (or any withheld claim of an open mandate) disables enforcement; refuse it.
@@ -261,7 +281,8 @@ export async function checkMandate(segments: Segment[], opts: Ap2MandateOptions,
     for (const w of s.itemWithheld) {
       const container = w.path[w.path.length - 1];
       if (w.kind === 'element' && typeof container === 'string' && DISCLOSABLE_ARRAYS.has(container)) continue;
-      throw new Ap2Failure('unresolved_constraint', 'withheld_disclosure', `An open mandate withholds ${w.kind === 'element' ? 'an element of' : 'a claim of'} ${w.path.length ? w.path.join('.') : 'the mandate'}: every constraint must be disclosed`);
+      // P-36: a decoy digest (RFC 9901 §4.2.5) can't be told from a withheld claim, so it is refused too.
+      throw new Ap2Failure('unresolved_constraint', 'withheld_disclosure', `An open mandate has an undisclosed (withheld or decoy) digest in ${w.path.length ? w.path.join('.') : 'the mandate'}: every constraint must be disclosed, and decoy digests can't be told from withheld claims`);
     }
   }
   // Claims set in an open mandate reach the closed mandate unchanged.

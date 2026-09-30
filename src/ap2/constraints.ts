@@ -46,38 +46,59 @@ export function toMinorUnits(major: number, currency: string): number {
 }
 
 /**
+ * S-56: bounds on `checkout.line_items`, so a large mandate can't stall a
+ * verifier. Beyond them the constraint is `unresolved_constraint`.
+ */
+export const LINE_ITEM_LIMITS = { requirements: 100, acceptableItems: 1000, cartLines: 100 } as const;
+
+/**
  * `checkout.line_items` as a maximum flow (checkout_mandate.md): source → each
  * requirement (capacity = quantity) → each checkout item ID it accepts (∞) →
  * sink (capacity = that ID's total quantity). Met when the flow equals both the
- * total required quantity and the total checkout quantity.
+ * total required quantity and the total checkout quantity. Edmonds–Karp on
+ * adjacency lists (the graph is sparse: only accepted IDs are edges).
  */
 export function lineItemsSatisfied(requirements: { accepts: Set<string>; quantity: number }[], cart: Map<string, number>): boolean {
   const need = requirements.reduce((a, r) => a + r.quantity, 0);
   const have = [...cart.values()].reduce((a, q) => a + q, 0);
   if (need !== have) return false;
   const skus = [...cart.keys()];
+  const skuIndex = new Map(skus.map((sku, j) => [sku, j]));
   const R = requirements.length;
   const N = 2 + R + skus.length;
   const S = 0, T = N - 1;
-  const cap: number[][] = Array.from({ length: N }, () => new Array<number>(N).fill(0));
+  // Edge arrays: to, capacity; the reverse of edge e is e ^ 1.
+  const to: number[] = [], cap: number[] = [];
+  const adj: number[][] = Array.from({ length: N }, () => []);
+  const addEdge = (u: number, v: number, c: number) => {
+    adj[u]!.push(to.length); to.push(v); cap.push(c);
+    adj[v]!.push(to.length); to.push(u); cap.push(0);
+  };
   requirements.forEach((r, i) => {
-    cap[S]![1 + i] = r.quantity;
-    skus.forEach((sku, j) => { if (r.accepts.has(sku)) cap[1 + i]![1 + R + j] = Number.MAX_SAFE_INTEGER; });
-  });
-  skus.forEach((sku, j) => { cap[1 + R + j]![T] = cart.get(sku)!; });
-  let flow = 0;
-  for (;;) { // Edmonds–Karp
-    const prev = new Array<number>(N).fill(-1);
-    prev[S] = S;
-    const queue = [S];
-    while (queue.length && prev[T] === -1) {
-      const u = queue.shift()!;
-      for (let v = 0; v < N; v++) if (prev[v] === -1 && cap[u]![v]! > 0) { prev[v] = u; queue.push(v); }
+    addEdge(S, 1 + i, r.quantity);
+    for (const sku of r.accepts) {
+      const j = skuIndex.get(sku);
+      if (j !== undefined) addEdge(1 + i, 1 + R + j, Number.MAX_SAFE_INTEGER);
     }
-    if (prev[T] === -1) break;
+  });
+  skus.forEach((sku, j) => addEdge(1 + R + j, T, cart.get(sku)!));
+  let flow = 0;
+  for (;;) {
+    const via = new Array<number>(N).fill(-1); // edge used to reach each node
+    const seen = new Array<boolean>(N).fill(false);
+    seen[S] = true;
+    const queue = [S];
+    for (let head = 0; head < queue.length && !seen[T]; head++) {
+      const u = queue[head]!;
+      for (const e of adj[u]!) {
+        const v = to[e]!;
+        if (!seen[v] && cap[e]! > 0) { seen[v] = true; via[v] = e; queue.push(v); }
+      }
+    }
+    if (!seen[T]) break;
     let bottleneck = Number.MAX_SAFE_INTEGER;
-    for (let v = T; v !== S; v = prev[v]!) bottleneck = Math.min(bottleneck, cap[prev[v]!]![v]!);
-    for (let v = T; v !== S; v = prev[v]!) { cap[prev[v]!]![v]! -= bottleneck; cap[v]![prev[v]!]! += bottleneck; }
+    for (let v = T; v !== S; v = to[via[v]! ^ 1]!) bottleneck = Math.min(bottleneck, cap[via[v]!]!);
+    for (let v = T; v !== S; v = to[via[v]! ^ 1]!) { cap[via[v]!]! -= bottleneck; cap[via[v]! ^ 1]! += bottleneck; }
     flow += bottleneck;
   }
   return flow === need;
@@ -97,6 +118,12 @@ function evalCheckout(c: Obj, checkout: Obj, out: ConstraintOutcome): void {
     case 'checkout.line_items': {
       const items = Array.isArray(c.items) ? c.items : [];
       if (!items.length) { out.violations.push('checkout.line_items: no requirements'); return; }
+      const lines = Array.isArray(checkout.line_items) ? checkout.line_items : [];
+      const accepted = items.reduce((n: number, it) => n + (isObj(it) && Array.isArray(it.acceptable_items) ? it.acceptable_items.length : 0), 0);
+      if (items.length > LINE_ITEM_LIMITS.requirements || lines.length > LINE_ITEM_LIMITS.cartLines || accepted > LINE_ITEM_LIMITS.acceptableItems) {
+        out.unresolved.push(`checkout.line_items: too large to evaluate (at most ${LINE_ITEM_LIMITS.requirements} requirements, ${LINE_ITEM_LIMITS.acceptableItems} acceptable items, ${LINE_ITEM_LIMITS.cartLines} checkout lines)`);
+        return;
+      }
       const reqs: { accepts: Set<string>; quantity: number }[] = [];
       for (const it of items) {
         if (!isObj(it) || !isInt(it.quantity) || it.quantity <= 0) { out.violations.push('checkout.line_items: a requirement needs a positive integer quantity'); return; }
@@ -104,7 +131,6 @@ function evalCheckout(c: Obj, checkout: Obj, out: ConstraintOutcome): void {
         reqs.push({ accepts: new Set(acc.filter(isObj).map((a) => a.id).filter(nonEmpty)), quantity: it.quantity });
       }
       if (reqs.some((r) => r.accepts.size === 0)) out.violations.push('checkout.line_items: a requirement reveals no acceptable item (an empty list matches nothing)');
-      const lines = Array.isArray(checkout.line_items) ? checkout.line_items : [];
       const cart = new Map<string, number>();
       for (const li of lines) {
         const id = isObj(li) && isObj(li.item) ? li.item.id : undefined;

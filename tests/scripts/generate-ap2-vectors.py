@@ -49,7 +49,7 @@ from ap2.sdk.generated.types.total import Total
 from ap2.sdk.jwt_helper import create_jwt
 from ap2.sdk.mandate import MandateClient
 from ap2.sdk.payment_mandate_chain import PaymentMandateChain
-from ap2.sdk.sdjwt import kb_sd_jwt
+from ap2.sdk.sdjwt import kb_sd_jwt, sd_jwt
 from ap2.sdk.sdjwt.common import compute_sd_hash, parse_token
 from ap2.sdk.utils import compute_sha256_b64url
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -249,6 +249,22 @@ vectors.append({'id': 'hp-checkout', 'family': 'checkout', 'mode': 'human_presen
 vectors.append({'id': 'hp-payment', 'family': 'payment', 'mode': 'human_present', 'chain': hp_payment, 'checkout_jwt': cj_hp,
                 'sdk_reference': compute_sha256_b64url(client.get_closed_mandate_jwt(hp_payment)),
                 'sdk': sdk_verify_single(hp_payment, PaymentMandate)})
+
+# ── 6. Decoy digests (RFC 9901 §4.2.5): the SDK adds them when asked (P-36) ──
+decoy_open = sd_jwt.create(payload=OpenCheckoutMandate(
+    constraints=[LineItems(items=[LineItemRequirements(id='line_1', quantity=1, acceptable_items=[ReqItem(id='sku_gold_sneaker_9', title='Gold Sneaker 9')])])],
+    cnf={'jwk': pub(agent)}, iat=NOW, exp=NOW + 3600,
+), issuer_key=provider, add_decoy_claims=True).sd_jwt_issuance
+decoy_chain = client.present(
+    holder_key=agent, mandate_token=decoy_open,
+    payloads=[CheckoutMandate(checkout_jwt=cj, checkout_hash=compute_sha256_b64url(cj), iat=NOW)],
+    aud='merchant', nonce='nonce-decoy-1')
+vectors.append({
+    'id': 'hnp-checkout-decoys', 'family': 'checkout', 'mode': 'human_not_present',
+    'chain': decoy_chain, 'checkout_jwt': cj, 'aud': 'merchant', 'nonce': 'nonce-decoy-1',
+    'sdk_reference': compute_sha256_b64url(client.get_closed_mandate_jwt(decoy_chain)),
+    'sdk': sdk_verify(decoy_chain, 'checkout', 'merchant', 'nonce-decoy-1', checkout_jwt=cj, expected_checkout_hash=compute_sha256_b64url(cj)),
+})
 
 fixture = {
     'generated_at': NOW,

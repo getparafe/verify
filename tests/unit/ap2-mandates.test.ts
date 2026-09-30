@@ -16,7 +16,7 @@ import {
 } from '../../src/index.js';
 import { checkMandate } from '../../src/ap2/mandate.js';
 import { splitChain, parseSegment, verifySegmentSignature, cnfJwk, sdHash } from '../../src/ap2/sdjwt.js';
-import { segment, hop, join, pub, sha, disclosure, checkoutJwt } from '../helpers/ap2-mint.js';
+import { segment, hop, join, pub, sha, sign, disclosure, checkoutJwt } from '../helpers/ap2-mint.js';
 
 const load = (f: string) => JSON.parse(readFileSync(new URL(`../fixtures/${f}`, import.meta.url), 'utf8'));
 const fx = load('ap2-sdk-vectors.json');
@@ -405,5 +405,56 @@ describe('negative: chain integrity', () => {
     expect((await verifyAp2Mandate(badPisp.chain, badPisp.opts)).error?.message).toContain('allowed_pisps');
     const late = await paymentChain({ closed: { execution_date: '2027-01-01T00:00:00Z' }, constraints: [{ type: 'payment.execution_date', not_after: '2026-12-31T23:59:59Z' }, ref] });
     expect((await verifyAp2Mandate(late.chain, late.opts)).error?.message).toContain('execution_date');
+  });
+});
+
+describe('Phase 3 review fixes', () => {
+  it('P-36: an AP2 SDK mandate with decoy digests is refused (a decoy looks like a withheld claim); the SDK accepts it', async () => {
+    const v = V['hnp-checkout-decoys'];
+    expect(v.sdk).toEqual({ chain_valid: true, violations: [] });
+    const r = await verifyAp2Mandate(v.chain, base({ checkoutJwt: v.checkout_jwt }));
+    expect(r.error).toMatchObject({ ap2Error: 'unresolved_constraint', reason: 'withheld_disclosure' });
+    expect(r.error?.message).toContain('decoy');
+    // The chain itself is sound.
+    expect((await verifyAp2Chain(v.chain, base())).valid).toBe(true);
+  });
+
+  it('S-53: says who signed the closed mandate', async () => {
+    const hnp = await verifyAp2Mandate(V['hnp-checkout'].chain, base({ checkoutJwt: V['hnp-checkout'].checkout_jwt }));
+    expect(hnp).toMatchObject({ closedBy: 'open_mandate_key', closedByKeyThumbprint: hnp.agentKeyThumbprint });
+    const hp = await verifyAp2Mandate(V['hp-checkout'].chain, base({ checkoutJwt: V['hp-checkout'].checkout_jwt }));
+    expect(hp.closedBy).toBe('issuer');
+    expect(hp.closedByKey).toBeUndefined();
+    // User Credential model: a root credential whose cnf is the holder's key, then the holder's hop.
+    const cj = await mkCheckout([['sku_gold', 1]]);
+    const cred = `${await sign({ iss: 'https://bank.example', vct: 'com.emvco.dpc', cnf: { jwk: pub(K.agent2) }, iat }, K.provider, { kid: 'agent-provider-key-1' })}~`;
+    const hop1 = await hop(cred, { vct: 'mandate.checkout.1', checkout_jwt: cj, checkout_hash: sha(cj), iat }, K.agent2, { iat });
+    const uc = await verifyAp2Mandate(join(cred, hop1), base());
+    expect(uc.error).toBeUndefined();
+    expect(uc).toMatchObject({ mode: 'human_present', closedBy: 'credential_holder' });
+    expect(uc.closedByKey).toEqual(pub(K.agent2));
+  });
+
+  it("S-53: a Parafé agent identity credential can't be a mandate's root", async () => {
+    const cj = await mkCheckout([['sku_gold', 1]]);
+    const cred = `${await sign({ iss: 'did:web:broker.test', vct: 'https://parafe.ai/vct/agent-identity/1', sub: 'did:web:broker.test:agents:prf_agent_x', cnf: { jwk: pub(K.agent) }, iat }, K.provider, { typ: 'dc+sd-jwt' })}~`;
+    const closed = await hop(cred, { vct: 'mandate.checkout.1', checkout_jwt: cj, checkout_hash: sha(cj), iat }, K.agent, { iat });
+    const r = await verifyAp2Mandate(join(cred, closed), base());
+    expect(r.error).toMatchObject({ ap2Error: 'invalid_credential', reason: 'agent_credential_root' });
+  });
+
+  it('S-56: an oversized line_items constraint is unresolved, quickly', async () => {
+    const reqs = Array.from({ length: 150 }, (_, i) => ({ id: `r${i}`, quantity: 1, acceptable_items: [{ id: `sku_${i}`, title: 't' }] }));
+    const r = await checkoutChain({ constraints: [{ type: 'checkout.line_items', items: reqs }], lines: reqs.map((x, i) => [`sku_${i}`, 1] as [string, number]) });
+    const t0 = performance.now();
+    const res = await verifyAp2Mandate(r.chain, base());
+    expect(res.error).toMatchObject({ ap2Error: 'unresolved_constraint', reason: 'constraint_unresolved' });
+    expect(performance.now() - t0).toBeLessThan(500);
+    // At the limit: a full 100×100 bipartite graph (every requirement accepts every SKU) is fast.
+    const all = Array.from({ length: 10 }, (_, i) => ({ id: `sku_${i}`, title: 't' }));
+    const cart = new Map(all.map((a) => [a.id, 10]));
+    const t1 = performance.now();
+    expect(lineItemsSatisfied(Array.from({ length: 100 }, () => ({ accepts: new Set(all.map((a) => a.id)), quantity: 1 })), cart)).toBe(true);
+    expect(performance.now() - t1).toBeLessThan(200);
   });
 });

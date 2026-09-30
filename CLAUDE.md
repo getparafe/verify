@@ -16,7 +16,7 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/presentation.ts` — presentation proof (B7) verification against a consent token's `cnf.jkt`.
 - `src/action-receipt.ts` — B6: action receipts (agent-signed, key from the agent's DID document), index acknowledgments (broker-signed) and `verifySessionIndex` (the session receipt's `actions` recompute to `chain_head`; held receipts are listed).
 - `src/identity-credential.ts` — SD-JWT VC identity credential; `matchAgentKey`.
-- `src/ap2/` — AP2 v0.2 mandates (change request A1): `sdjwt.ts` (Delegate SD-JWT chain parsing on OWF `@sd-jwt/decode` plus a strict disclosure pass), `constraints.ts` (every v0.2 constraint), `mandate.ts` (`verifyAp2Chain`, `verifyAp2Mandate`, `ap2MandateReferences`), `errors.ts` (AP2 error codes).
+- `src/ap2/` — AP2 v0.2 mandates (change request A1): `sdjwt.ts` (Delegate SD-JWT chain parsing on OWF `@sd-jwt/core` ≥ 0.20, never `@sd-jwt/decode` (GHSA-f9j6-8p6x-r9j6), plus a strict disclosure pass), `constraints.ts` (every v0.2 constraint), `mandate.ts` (`verifyAp2Chain`, `verifyAp2Mandate`, `ap2MandateReferences`), `errors.ts` (AP2 error codes).
 - `src/jwt-verify.ts` — Credential + consent JWT verification via jose.
 - `src/receipt-verify.ts` — v1 receipts: raw Ed25519 verification of canonicalized receipt JSON.
 - `src/verify.ts` — Auto-detect façade.
@@ -43,7 +43,7 @@ npm run fixtures:generate  # Regenerate fixtures against a broker
 
 ## Key Design Decisions
 
-- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests. Works in Node 18+ and all modern browsers without polyfills.
+- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests + `@sd-jwt/core` for AP2 SD-JWT decoding. Works in Node 18+ and all modern browsers without polyfills.
 - **Byte-for-byte parity with broker (v1 only)** — `canonicalize.ts` must produce identical output to the broker's v1 receipt canonicalizer (`broker/src/routes/receipt.js`, `canonicalizeV1`). v2 receipts are JWS: no canonicalization.
 - **VerifyResult instead of throwing** — Signature and claim failures populate `result.error` rather than throwing. Only key-fetch and key-pinning failures throw (caller can't meaningfully treat those as "signature invalid").
 - **Auto-detect format** — JWT string vs signed receipt JSON (as issued, or an SDK 0.3.2+ receipt's `issued` field) is detected from structure. Explicit variants (`verifyCredentialJWT`, `verifySignedReceipt`) exist for power users.

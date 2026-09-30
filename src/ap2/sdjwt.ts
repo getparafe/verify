@@ -4,15 +4,15 @@
  * A chain is `~~`-joined SD-JWTs: a root signed by an issuer the verifier
  * trusts, then KB-SD-JWT hops, each signed by the key in the previous hop's
  * `cnf.jwk`. Parsing, disclosure decoding and digests use the OpenWallet
- * Foundation libraries (`@sd-jwt/decode`, `@sd-jwt/utils`); disclosures are
- * resolved with OWF's `unpackObj`. OWF drops what isn't disclosed without saying
- * so, and doesn't refuse unreferenced or duplicate disclosures, so a strict pass
- * here checks those rules (RFC 9901 §7.1) and records every withheld digest.
- * The two must produce the same claims.
+ * Foundation library (`@sd-jwt/core` >= 0.20, which absorbed `@sd-jwt/decode`
+ * and fixed GHSA-f9j6-8p6x-r9j6); disclosures are resolved with its
+ * `unpackObj`. OWF drops what isn't disclosed without saying so, so a strict
+ * pass here also records every withheld digest (and checks RFC 9901 §7.1
+ * itself: unreferenced, duplicate and misplaced disclosures). The two must
+ * produce the same claims.
  */
 import { compactVerify, importJWK, calculateJwkThumbprint, type JWK, type KeyLike } from 'jose';
-import { decodeJwt as owfDecodeJwt, unpackObj, createHashMappingSync } from '@sd-jwt/decode';
-import { Disclosure } from '@sd-jwt/utils';
+import { decodeJwt as owfDecodeJwt, unpackObj, createHashMappingSync, Disclosure } from '@sd-jwt/core';
 import { sha256 } from '@noble/hashes/sha256';
 import { sha384, sha512 } from '@noble/hashes/sha512';
 import { canonicalize } from '../canonicalize.js';

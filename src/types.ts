@@ -183,6 +183,17 @@ export interface ReceiptV2Action {
   action: string;
   result: 'success' | 'error';
   error: string | null;
+  /**
+   * A3 (broker, entries that name an AP2 mandate): whether the reference (an AP2
+   * receipt's `reference`, an action receipt's `mandate_ref`) matched a mandate
+   * the receipt's issuer, or the handshake, verified in the session; the matched
+   * closed-mandate hash; which agent verified it; and whose trust list it
+   * passed (`scope_policy`, `broker` or `request`: the verifier's own list).
+   */
+  reference_verified?: boolean;
+  mandate_ref?: string | null;
+  mandate_verified_by?: string | null;
+  mandate_issuer_source?: string | null;
 }
 
 // ─────────────── Action receipt and index acknowledgment (B6) ───────────────
@@ -222,6 +233,17 @@ export interface IndexAckClaims {
   prev: string | null;
   entry_hash: string;
   indexed_at: string;
+  /**
+   * A3 (broker, entries that name an AP2 mandate): whether the reference (an AP2
+   * receipt's `reference`, an action receipt's `mandate_ref`) matched a mandate
+   * the receipt's issuer, or the handshake, verified in the session; the matched
+   * closed-mandate hash; which agent verified it; and whose trust list it
+   * passed (`scope_policy`, `broker` or `request`: the verifier's own list).
+   */
+  reference_verified?: boolean;
+  mandate_ref?: string | null;
+  mandate_verified_by?: string | null;
+  mandate_issuer_source?: string | null;
 }
 
 // ─────────────── Identity credential (SD-JWT VC, since 2026-09-30) ───────────────
