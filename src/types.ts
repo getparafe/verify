@@ -50,7 +50,17 @@ export interface CredentialClaims {
 
 // ─────────────── Consent ───────────────
 
-export type AuthorizationModality = 'autonomous' | 'attested' | 'verified' | (string & {});
+/** Weakest to strongest: autonomous < attested < delegated < verified (delegated and verified: a broker-checked AP2 mandate, broker B8). */
+export type AuthorizationModality = 'autonomous' | 'attested' | 'delegated' | 'verified' | (string & {});
+
+/** An AP2 mandate behind a consent token, by hash both ways (broker B8). */
+export interface MandateRef {
+  family: 'checkout' | 'payment';
+  /** SHA-256 of the closed mandate JWT (the AP2 SDK's receipt reference). */
+  closed_jwt: string;
+  /** sd_hash of the final SD-JWT as presented (the AP2 spec's). */
+  sd_hash: string;
+}
 
 export interface ConsentClaims {
   scope: string;
@@ -74,6 +84,8 @@ export interface ConsentClaims {
   session_id: string;
   token_type: 'consent';
   authorization_modality: AuthorizationModality;
+  /** The AP2 mandates behind 'delegated' / 'verified' (broker B8). */
+  mandate_refs?: MandateRef[];
   initiator_agent_id: string | null;
   target_agent_id: string | null;
   parent_token_id: string | null;
@@ -130,7 +142,7 @@ export interface ReceiptV2ConsentToken {
   scope: string;
   permissions: string[];
   exclusions: string[];
-  authorization: { modality: AuthorizationModality; evidence_hash: string | null; mandate_refs: string[] };
+  authorization: { modality: AuthorizationModality; evidence_hash: string | null; mandate_refs: MandateRef[] };
   initiator_proof?: 'pop' | 'credential' | null;
   initiator_proof_at?: string | null;
   issued_at: string;

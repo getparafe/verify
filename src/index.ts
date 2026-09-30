@@ -102,5 +102,6 @@ export type {
   IdentityCredentialClaims,
   IdentityAssurance,
   AuthorizationModality,
+  MandateRef,
   PublicKeyResponse,
 } from './types.js';
