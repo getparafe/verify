@@ -103,6 +103,8 @@ A failure's `error.ap2Error` is the AP2 code for your Checkout or Payment Receip
 
 Stricter than the AP2 Python SDK where AP2 has open issues: merchants and payees match by `id` only (#315); instruments by `id` and `type` (#320); an empty `acceptable_items` matches nothing and quantities must be filled exactly (#298); a terminal hop without `aud`/`nonce` fails whatever you expect (#319); `checkout_hash` is always checked against the Checkout JWT presented (#358); a withheld constraint fails (#339); recurrence checks the frequency, not only the count. Checked against the AP2 SDK's own vectors, the spec's encoded examples and the golden vectors of AP2 PR #307. SD-JWT parsing and disclosure resolution use the OpenWallet Foundation's `@sd-jwt/core`; an extra strict pass records withheld digests and checks the disclosure rules itself.
 
+**As a merchant on Parafé.** Pass your own values: `expectedAudience` is your agent's DID or agent ID (the broker accepts nothing else as a hop's `aud` at a handshake), `expectedNonce` is the nonce you issued for this purchase (e.g. the quote ID; the broker can't know it, so only you can check it), and the mandate's merchant (`merchant.id`) or payee (`payee.id`) should be your agent ID or DID, or a `merchant.website` on your org's verified domain. A mandate the issuer signed directly (root-only, AP2's human-present model) has no `aud` or `nonce`: don't pass `expectedAudience`/`expectedNonce` for it, pass `maxPresentationAgeSec` (the broker uses 300). AP2 receipts you sign in return are ES256, so your agent needs a P-256 key.
+
 `matchAgentKey(credential, mandate)` also takes a `verifyAp2Mandate` result or a presented chain (the last open mandate's `cnf.jwk`).
 
 Things to know:
