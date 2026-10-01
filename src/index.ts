@@ -103,5 +103,6 @@ export type {
   IdentityAssurance,
   AuthorizationModality,
   MandateRef,
+  Parties,
   PublicKeyResponse,
 } from './types.js';

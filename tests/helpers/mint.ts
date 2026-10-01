@@ -65,7 +65,7 @@ export interface MintCredentialInput {
   privateKey: KeyLike;
   sub?: string;
   name?: string;
-  owner?: string;
+  principal_name?: string;
   identity_assurance?: string;
   verification_tier?: string;
   pub_key_thumbprint?: string;
@@ -73,19 +73,26 @@ export interface MintCredentialInput {
   exp?: number;
   iss?: string;
   jti?: string;
+  /** Claims to drop before signing (e.g. 'principal_name'). */
+  omit?: string[];
+  /** Extra claims (e.g. an old credential's 'owner'). */
+  extra?: Record<string, unknown>;
 }
 
 export async function mintCredential(input: MintCredentialInput): Promise<string> {
   const now = input.iat ?? Math.floor(Date.now() / 1000);
   const exp = input.exp ?? now + 30 * 24 * 60 * 60;
-  const builder = new SignJWT({
+  const claims: Record<string, unknown> = {
     sub: input.sub ?? 'prf_agent_test',
     name: input.name ?? 'Test Agent',
-    owner: input.owner ?? 'Test Org',
+    principal_name: input.principal_name ?? 'Test Org',
     identity_assurance: input.identity_assurance ?? 'registered',
     verification_tier: input.verification_tier ?? 'email_verified',
     pub_key_thumbprint: input.pub_key_thumbprint ?? 'a'.repeat(64),
-  })
+    ...input.extra,
+  };
+  for (const k of input.omit ?? []) delete claims[k];
+  const builder = new SignJWT(claims)
     .setProtectedHeader({ alg: 'EdDSA' })
     .setIssuedAt(now)
     .setExpirationTime(exp)

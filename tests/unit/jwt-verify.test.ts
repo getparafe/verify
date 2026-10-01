@@ -28,6 +28,20 @@ describe('verifyCredentialJWT', () => {
     expect(result.error?.code).toBe('INVALID_SIGNATURE');
   });
 
+  it('verifies a credential issued before SPEC-002 (owner, no principal_name)', async () => {
+    const kr = await createTestKeyring();
+    const jwt = await mintCredential({ privateKey: kr.joseSigningKey, omit: ['principal_name'], extra: { owner: 'Old Org' } });
+    const result = await verifyCredentialJWT(jwt, { key: kr.keySource });
+    expect(result.valid).toBe(true);
+    expect(result.claims?.owner).toBe('Old Org');
+  });
+
+  it('verifies a credential with neither name claim (the free-text name is not required)', async () => {
+    const kr = await createTestKeyring();
+    const jwt = await mintCredential({ privateKey: kr.joseSigningKey, omit: ['principal_name'] });
+    expect((await verifyCredentialJWT(jwt, { key: kr.keySource })).valid).toBe(true);
+  });
+
   it('rejects an expired credential', async () => {
     const kr = await createTestKeyring();
     const now = Math.floor(Date.now() / 1000);

@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   const register = async (name: string, kind: 'p256' | 'ed25519', scope_policies?: unknown): Promise<Agent> => {
     const { privateKey, publicKey } = kind === 'p256' ? generateKeyPairSync('ec', { namedCurve: 'P-256' }) : generateKeyPairSync('ed25519');
     const r = await call('POST', '/agents/register', {
-      agent_name: `${name}-${suffix}`, owner: 'Verify Fixtures', public_key: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+      agent_name: `${name}-${suffix}`, principal_name: 'Verify Fixtures', public_key: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
       ...(scope_policies ? { scope_policies } : {}),
     }, { Authorization: `Bearer ${apiKey}` });
     return { id: r.agent_id, did: r.did, credential: r.credential, privateKey };

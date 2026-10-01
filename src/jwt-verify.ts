@@ -101,7 +101,9 @@ function assertCredentialShape(payload: Record<string, unknown>): void {
     throw new WrongArtifactTypeError('credential', 'consent token');
   }
   const required: Array<keyof CredentialClaims> = [
-    'sub', 'name', 'owner', 'identity_assurance', 'verification_tier', 'pub_key_thumbprint', 'iat', 'exp', 'iss',
+    // No name claim: the agent's free-text principal name is `principal_name`
+    // since broker SPEC-002 and `owner` before; neither is security-relevant.
+    'sub', 'name', 'identity_assurance', 'verification_tier', 'pub_key_thumbprint', 'iat', 'exp', 'iss',
   ];
   for (const field of required) {
     if (payload[field] === undefined || payload[field] === null) {

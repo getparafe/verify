@@ -25,7 +25,8 @@ function fromB64u(s: string): string {
  * 2026-09-30): `<issuer JWT>~<disclosure>~...~`. Checks the broker's ES256
  * signature (kid is a DID URL), typ `dc+sd-jwt`, vct, expiry, and that every
  * disclosure is one the issuer committed to (`_sd`). Returns the plain claims
- * plus the disclosed ones (`owner`, `owner_id` when presented). `cnf.jwk` is the
+ * plus the disclosed ones (`principal_name`, `principal_id`, `principal_ref` when
+ * presented; `owner`, `owner_id` in credentials issued before broker SPEC-002). `cnf.jwk` is the
  * agent's registered key. A key-binding JWT, if appended, is not checked here.
  */
 export async function verifyIdentityCredential(

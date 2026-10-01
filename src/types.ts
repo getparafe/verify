@@ -36,12 +36,22 @@ export interface CredentialClaims {
   /** Agent ID (sub claim) */
   sub: string;
   name: string;
-  owner: string;
+  /** Who the agent acts for (its principal), as free text (broker SPEC-002). Not required. */
+  principal_name?: string;
+  /** The same, in credentials issued before SPEC-002 (they renew within 30 days). */
+  owner?: string;
   identity_assurance: IdentityAssurance;
   verification_tier: string;
   pub_key_thumbprint: string;
-  owner_type?: string;
-  owner_id?: string;
+  principal_type?: 'personal' | 'org' | 'external';
+  /** An org principal's ID (a person's user ID is never in the credential). */
+  principal_id?: string;
+  /** The operator's reference for an external principal (one of a platform's users). */
+  principal_ref?: string;
+  /** Who runs the agent and answers for it; absent when self-registered or claimed. */
+  operator_type?: 'personal' | 'org';
+  /** An org operator's ID (absent for a personal operator). */
+  operator_id?: string;
   iat: number;
   exp: number;
   iss: string;
@@ -87,6 +97,10 @@ export interface ConsentClaims {
   /** The AP2 mandates behind 'delegated' / 'verified' (broker B8). */
   mandate_refs?: MandateRef[];
   initiator_agent_id: string | null;
+  /** Broker SPEC-002: the initiator's operator and principal. */
+  initiator_parties?: Parties;
+  /** Broker SPEC-002: the target's operator and principal. */
+  target_parties?: Parties;
   target_agent_id: string | null;
   parent_token_id: string | null;
   iat: number;
@@ -101,6 +115,19 @@ export interface ReceiptParticipant {
   agent_name: string;
   identity_assurance: IdentityAssurance;
   did?: string;
+  /** Broker SPEC-002 (v2 receipts): the participant's operator and principal. */
+  parties?: Parties;
+}
+
+/**
+ * Broker SPEC-002: who runs an agent (operator) and who it acts for
+ * (principal). A person's user ID is never shown: a personal operator or
+ * principal has `type` only; an org has `id`; an external principal (a
+ * platform's user) has the platform's opaque `ref`.
+ */
+export interface Parties {
+  operator: { type: 'personal' | 'org'; id?: string } | null;
+  principal: { type: 'personal' | 'org' | 'external'; id?: string; ref?: string } | null;
 }
 
 export interface ReceiptConsentToken {
@@ -261,14 +288,19 @@ export interface IdentityCredentialClaims {
   agent_name: string;
   identity_assurance: IdentityAssurance;
   verification_tier: string;
-  owner_type?: string;
+  principal_type?: 'personal' | 'org' | 'external';
   /** Selectively disclosed. */
-  owner?: string;
+  principal_name?: string;
   /** Selectively disclosed. */
-  owner_id?: string;
-  /** Only for agents of an org that verified its domain. */
-  org_domain?: string;
-  org_domain_verified_at?: number;
+  principal_id?: string;
+  /** Selectively disclosed: the operator's reference for an external principal. */
+  principal_ref?: string;
+  operator_type?: 'personal' | 'org';
+  /** Absent for a personal operator. */
+  operator_id?: string;
+  /** Only when the operator is an org that verified its domain. */
+  operator_domain?: string;
+  operator_domain_verified_at?: number;
 }
 
 // ─────────────── Broker response ───────────────

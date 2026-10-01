@@ -65,7 +65,7 @@ suite('integration: full handshake lifecycle against a live broker', () => {
   async function register(apiKey: string, name: string, publicKeyBase64: string, extra: Record<string, unknown> = {}) {
     return post<{ agent_id: string; did: string; credential: string; credential_sd_jwt: string }>(
       '/agents/register',
-      { agent_name: `${name}-${Date.now().toString(36)}`, owner: 'Verify Integration', public_key: publicKeyBase64, ...extra },
+      { agent_name: `${name}-${Date.now().toString(36)}`, principal_name: 'Verify Integration', public_key: publicKeyBase64, ...extra },
       apiKey
     );
   }

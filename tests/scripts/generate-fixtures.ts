@@ -73,10 +73,10 @@ async function main(): Promise<void> {
   const initiator = freshAgentKeys();
   const target = freshAgentKeys();
   const initReg = await postJson('/agents/register', {
-    agent_name: `initiator-${suffix}`, owner: 'Verify Fixtures', public_key: initiator.publicKeyBase64,
+    agent_name: `initiator-${suffix}`, principal_name: 'Verify Fixtures', public_key: initiator.publicKeyBase64,
   }, apiKey);
   const targReg = await postJson('/agents/register', {
-    agent_name: `target-${suffix}`, owner: 'Verify Fixtures', public_key: target.publicKeyBase64,
+    agent_name: `target-${suffix}`, principal_name: 'Verify Fixtures', public_key: target.publicKeyBase64,
     scope_policies: { 'read-profile': { permissions: ['read_profile'], exclusions: ['delete_profile'] } },
   }, apiKey);
 
