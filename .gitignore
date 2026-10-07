@@ -5,3 +5,9 @@ dist/
 .env
 .env.local
 coverage/
+
+# Env and key files (keep .env.example tracked)
+.env*
+!.env.example
+*.pem
+*.key
