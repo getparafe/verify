@@ -16,7 +16,7 @@ No account. No permission. With `staticJwks()`, no network at all. `createPublic
 
 **What offline verification can't tell you.** A valid result means Parafe signed the artifact, it is unaltered and it hasn't expired. It can't see revocation: a credential or consent token that verifies here may belong to an agent revoked since (there is no status list yet). Consent tokens last 5 minutes and credentials 30 days, which bounds the gap. When it matters, ask the broker: `POST /consent/verify` refuses tokens of a revoked agent, and an agent's DID document (`/agents/<id>/did.json`) answers 404 once it is revoked or suspended.
 
-**Platforms.** Node 18 and later, with `import` or `require()`: the CommonJS build bundles the one ESM-only dependency, and v1 (Ed25519) receipts verify without WebCrypto. CI tests Node 20 and releases are tested on Node 22; Node 18 is checked by hand, not in CI. Browsers work too: since 2026-10-08 the broker's JWKS and agents' DID documents allow cross-origin reads, so `createPublicKeySource` can fetch them from a web page (against an older broker, pass the keys with `staticJwks()`).
+**Platforms.** Node 18 and later, with `import` or `require()` (CommonJS TypeScript projects included): the CommonJS build bundles the one ESM-only dependency, and v1 (Ed25519) receipts verify without WebCrypto. CI tests Node 20 and releases are tested on Node 22; Node 18 is checked by hand, not in CI. Browsers work too: since 2026-10-08 the broker's JWKS and agents' DID documents allow cross-origin reads, so `createPublicKeySource` can fetch them from a web page (against an older broker, pass the keys with `staticJwks()`).
 
 ## Install
 

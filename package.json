@@ -8,19 +8,34 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./canonicalize": {
-      "types": "./dist/canonicalize.d.ts",
-      "import": "./dist/canonicalize.js",
-      "require": "./dist/canonicalize.cjs"
+      "import": {
+        "types": "./dist/canonicalize.d.ts",
+        "default": "./dist/canonicalize.js"
+      },
+      "require": {
+        "types": "./dist/canonicalize.d.cts",
+        "default": "./dist/canonicalize.cjs"
+      }
     },
     "./keys": {
-      "types": "./dist/keys.d.ts",
-      "import": "./dist/keys.js",
-      "require": "./dist/keys.cjs"
+      "import": {
+        "types": "./dist/keys.d.ts",
+        "default": "./dist/keys.js"
+      },
+      "require": {
+        "types": "./dist/keys.d.cts",
+        "default": "./dist/keys.cjs"
+      }
     }
   },
   "files": [
