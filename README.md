@@ -6,13 +6,17 @@ Offline verification of [Parafe](https://parafe.ai) credentials, consent tokens,
 
 Parafe is a **neutral** trust broker. The claim only holds if you can verify a Parafe-issued artifact **without** trusting Parafe for the verification step.
 
-This package is how. Install it, fetch Parafe's public keys once, and verify every credential, consent token, and receipt you receive — locally, offline, forever.
+This package is how. Install it, fetch Parafe's public keys, and verify every credential, consent token, and receipt you receive — locally, with no Parafe account and no call to Parafe's API.
 
 ```
 artifact + Parafe's keys (JWKS, by kid)  →  ES256 / Ed25519 verify  →  valid | invalid
 ```
 
-No network calls after bootstrap. No account. No permission.
+No account. No permission. With `staticJwks()`, no network at all. `createPublicKeySource` fetches the JWKS on first use, again every 24 hours (`cacheTtlMs`) and when an artifact names an unknown `kid`, and throws `KEY_FETCH_FAILED` if the broker is unreachable then. `verifyActionReceipt` and `verifyPresentationProof` fetch the agent's DID document unless you pass `issuerKey` / `initiatorKey`.
+
+**What offline verification can't tell you.** A valid result means Parafe signed the artifact, it is unaltered and it hasn't expired. It can't see revocation: a credential or consent token that verifies here may belong to an agent revoked since (there is no status list yet). Consent tokens last 5 minutes and credentials 30 days, which bounds the gap. When it matters, ask the broker: `POST /consent/verify` refuses tokens of a revoked agent, and an agent's DID document (`/agents/<id>/did.json`) answers 404 once it is revoked or suspended.
+
+**Platforms.** CI tests Node 20; releases are tested on Node 22. `require()` needs Node 20.19+ or 22.12+ (a dependency is ESM-only), and on Node 18 v1 (Ed25519) receipts fail to verify. In a browser, pass the keys with `staticJwks()`: the broker's JWKS doesn't allow cross-origin fetches.
 
 ## Install
 
@@ -39,13 +43,13 @@ if (result.valid) {
 Same pattern for `verifyCredential(credential, { key })` and `verifyConsent(token, { key })`.
 
 `receipt` can be:
-- a **v2 receipt** (since 2026-09-30): the JWS string, the broker's `/session/close` response, or an `@getparafe/sdk` 0.4 receipt (its `receipt` field is the JWS). Claims come back as `ReceiptV2Payload`: participants, consent tokens with **exclusions**, a hash of each token, of the human's instruction and of the handshake context, and how the initiator proved itself (`initiator_proof`).
+- a **v2 receipt** (since 2026-09-30): the JWS string, the broker's `/session/close` response, or an `@getparafe/sdk` receipt from 0.4 on (its `receipt` field is the JWS). Claims come back as `ReceiptV2Payload`: participants, consent tokens with **exclusions**, a hash of each token, of the human's instruction and of the handshake context, and how the initiator proved itself (`initiator_proof`).
 - a **v1 receipt** (before): the signed JSON as the broker returned it, or an SDK 0.3.2+ receipt's `issued` field. They verify forever against the retired Ed25519 key.
 
 ## How verification works
 
 1. Fetch Parafe's keys once: the JWKS at `https://api.parafe.ai/.well-known/jwks.json` (the active ES256 key and retired keys, which stay published forever). A broker from before 2026-09-30 has only `/public-key`; that's used instead.
-2. Cache them. Optionally pin by `kid` or SHA-256 thumbprint.
+2. Cache them (see "Key pinning" below for what pinning does and doesn't protect).
 3. Every artifact names its key (`kid`, or no `kid` for the pre-2026-09-30 Ed25519 key). Verification is a pure signature check against the cached key — no network call, no Parafe API. If an artifact names a key the cache doesn't have yet (the broker added or rotated a key), `createPublicKeySource` refetches the JWKS once and retries, at most once a minute (`minRefetchIntervalMs`).
 
 Air-gapped? Paste the JWKS in with `staticJwks()` (or, for Ed25519-only artifacts, the key with `staticKey()`) and never touch the network.
@@ -82,11 +86,11 @@ Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJW
 
 **Consent tokens (v2).** Claims include `exclusions` (always set; older tokens called it `excluded`, and that is set too), `sub` (initiator), `aud` (target DID), `cnf.jkt` (the initiator key the token is bound to) and `initiator_proof` (`pop` or `credential`).
 
-**Presentation proofs.** A key-bound consent token is only as good as the proof that comes with it. When an initiator presents a token, it attaches a short JWT signed with its key. `verifyPresentationProof` checks it against the token's `cnf.jkt` (fetching the initiator's key from its DID document, or taking `initiatorKey`), that it's for this token (`ath`) and for you (`aud`, `expectedAudience`), and fresh (5 minutes). Remember the returned `jti` for 5 minutes and refuse repeats.
+**Presentation proofs.** A key-bound consent token is only as good as the proof that comes with it. When an initiator presents a token, it attaches a short JWT signed with its key. `verifyPresentationProof` checks it against the token's `cnf.jkt` (fetching the initiator's key from its DID document, or taking `initiatorKey`), that it's for this token (`ath`) and for you (`aud`, `expectedAudience`), and fresh: accepted from 60 seconds before its `iat` until 6 minutes after. Remember each returned `jti` for at least 7 minutes and refuse repeats.
 
-**Identity credential (SD-JWT VC).** `verifyIdentityCredential` checks the broker's signature, `vct`, expiry and every disclosure; `cnf.jwk` is the agent's registered key; `principal_name`/`principal_id`/`principal_ref` appear only when disclosed; `operator_domain` only when the agent's operator is a domain-verified org. `matchAgentKey(claims, mandate)` answers "does this AP2 open mandate's key belong to this Parafé-verified agent?" by RFC 7638 thumbprint. It does **not** verify the mandate itself.
+**Identity credential (SD-JWT VC).** `verifyIdentityCredential` checks the broker's signature, `vct`, expiry and every disclosure; `cnf.jwk` is the agent's registered key; `principal_name`/`principal_id`/`principal_ref` appear only when disclosed; `operator_domain` only when the agent's operator is a domain-verified org. No key-binding JWT is checked, so a valid credential doesn't prove the presenter holds `cnf.jwk`; it proves Parafé issued it. `identity_assurance` (`self_registered`: nobody authenticated) and `verification_tier` say what stands behind it. `matchAgentKey(claims, mandate)` answers "does this AP2 open mandate's key belong to this Parafé-registered agent?" by RFC 7638 thumbprint. It does **not** verify the mandate itself.
 
-**Operator and principal (0.6.0, broker SPEC-002).** Every agent names an *operator* (who runs it and answers for it) and a *principal* (who it acts for: a person, an org, or `external`, a platform's user known by the platform's opaque `ref`). Credentials carry `principal_name`, `principal_type`, `principal_id`, `principal_ref`, `operator_type`, `operator_id`; the SD-JWT VC carries `operator_domain` (was `org_domain`). A person's user ID is never in a credential. Consent tokens carry `initiator_parties`/`target_parties` and v2 receipts each participant's `parties` (type `Parties`). The free-text name claim is not required: credentials issued before SPEC-002 (`owner`) still verify.
+**Operator and principal (0.6.0).** An agent may name an *operator* (who runs it and answers for it) and a *principal* (who it acts for: a person, an org, or `external`, a platform's user known by the platform's opaque `ref`). A self-registered agent has neither until someone claims it; then it has a principal and still no operator. A platform's agent keeps its operator when the person claims it. Credentials carry `principal_name`, `principal_type`, `principal_id`, `principal_ref`, `operator_type`, `operator_id`; the SD-JWT VC carries `operator_domain` (was `org_domain`). A person's user ID is never in the JWT credential; in the SD-JWT VC it is the selectively disclosable `principal_id` (the broker returns it disclosed: drop that disclosure before presenting). Consent tokens carry `initiator_parties`/`target_parties` and v2 receipts each participant's `parties` (type `Parties`). The free-text name claim is not required: credentials issued before SPEC-002 (`owner`) still verify.
 
 **Action receipts and the session index (0.4.0).** The agent that performs or refuses an action signs an *action receipt* (a JWS with its own registered key, `typ: parafe-action-receipt+jwt`, `kid` = `<agent DID>#keys-1`) naming the action, `result` (`success` or `error`, with an error code such as `excluded`) and the consent token it acted under (`consent_ref` = base64url SHA-256 of the token). Either participant files it with the broker, which chains it per session and returns a signed *index acknowledgment* (`typ: parafe-index-ack+jwt`). The session receipt's `actions` lists every filed receipt by hash, and `chain_head` commits to the list.
 - `verifyActionReceipt` checks the agent's signature with the key in its DID document (fetched from `brokerUrl`, or pass `issuerKey`); `consentToken` and `expectedSessionId` bind it to your session.
@@ -124,7 +128,8 @@ Things to know:
 ```ts
 interface VerifyOptions {
   key: PublicKeySource;
-  expectedIssuer?: string;    // default: 'parafe-trust-broker'
+  expectedIssuer?: string;    // JWT credentials and consent tokens: default 'parafe-trust-broker'.
+                              // Receipts, acks and the SD-JWT VC: no default (their iss is the broker DID).
   clockToleranceSec?: number; // default 0
   now?: Date;                 // override current time (tests)
 }
@@ -136,7 +141,7 @@ interface VerifyOptions {
 interface VerifyResult<T> {
   valid: boolean;
   claims?: T;
-  format?: 'jwt' | 'receipt';
+  format?: 'jwt' | 'receipt' | 'receipt-jws' | 'sd-jwt' | 'action-receipt' | 'index-ack';
   keyId?: string;
   verifiedAt: string;
   error?: VerifyError;
@@ -145,7 +150,7 @@ interface VerifyResult<T> {
 
 ### Error codes
 
-Signature/claim failures populate `result.error` rather than throwing. Only key-fetch and key-pinning failures throw.
+Signature/claim failures populate `result.error` rather than throwing. Key-fetch and key-pinning failures throw, as do `ap2MandateReferences` on malformed input and a v1 receipt checked against a `staticJwks()` with no Ed25519 key.
 
 | Code | When |
 |---|---|
@@ -158,21 +163,22 @@ Signature/claim failures populate `result.error` rather than throwing. Only key-
 | `FORMAT_UNKNOWN` | Input isn't a JWT string or a signed receipt (the message says why for W3C VC objects and pre-0.3.2 SDK receipts) |
 | `KEY_NOT_FOUND` | The artifact names a `kid` the broker doesn't publish, or an ES256 artifact met an Ed25519-only `staticKey()` |
 | `PROOF_INVALID` | A presentation proof didn't check out (`verifyPresentationProof`) |
+| `AP2_MANDATE_INVALID` | An AP2 mandate didn't verify (`verifyAp2Mandate`, `verifyAp2Chain`) |
 | `KEY_FETCH_FAILED` | (throws) — broker unreachable or returned bad data |
 | `KEY_PIN_MISMATCH` | (throws) — `key_id` or thumbprint doesn't match pinning |
 
 ## Key pinning and air-gapped use
 
 ```ts
-import { createPublicKeySource, staticKey, pinKey } from '@getparafe/verify/keys';
+import { createPublicKeySource, staticJwks, staticKey } from '@getparafe/verify/keys';
 
-// Pin a key ID (a JWKS kid): only artifacts signed with that key verify
+// Restrict verification to one JWKS entry
 const key = createPublicKeySource({
   brokerUrl: 'https://api.parafe.ai',
   pin: { keyId: '<kid from /.well-known/jwks.json>' }
 });
 
-// Or pin by SHA-256 thumbprint of the base64 SPKI DER
+// Pin the retired Ed25519 key by the hex SHA-256 of its base64 SPKI string
 const pinned = createPublicKeySource({
   pin: { thumbprintSha256: '…hex…' }
 });
@@ -181,6 +187,8 @@ const pinned = createPublicKeySource({
 const offline = staticJwks(jwksJson);               // everything
 const legacyOnly = staticKey(base64SpkiDer);        // Ed25519 artifacts from before 2026-09-30
 ```
+
+**What pinning protects, in 0.6.0.** `keyId` picks which JWKS entry is used, but it trusts the JWKS's own labels: a substituted JWKS that gives another key the pinned `kid` passes. `thumbprintSha256` applies only to the retired Ed25519 key. So neither protects the ES256 keys against a substituted key source (Parafé finding S-66; a fix is planned). To fix the keys you trust, ship the JWKS with `staticJwks()`.
 
 ## Verifying signatures yourself
 
@@ -192,6 +200,12 @@ import { canonicalize } from '@getparafe/verify/canonicalize';
 const data = canonicalize(receiptWithoutSignature);
 // feed `data` + signature + public key into your Ed25519 verifier of choice
 ```
+
+Credentials and consent tokens verify with ES256 or EdDSA (the retired key; no date cutoff is enforced). v2 receipts, index acknowledgments and the SD-JWT VC verify with ES256 only.
+
+## Release notes
+
+Per-version notes from 0.3.0 on are on [GitHub Releases](https://github.com/getparafe/verify/releases); "(0.x.0)" markers above say when a feature arrived.
 
 ## Reporting a verification disagreement
 

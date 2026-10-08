@@ -1,6 +1,6 @@
 # @getparafe/verify
 
-Standalone npm package that verifies Parafe credentials (JWT and SD-JWT VC), consent tokens, presentation proofs and receipts (v2 JWS and v1 signed JSON) offline against Parafe's published keys (JWKS: ES256 since 2026-09-30, the retired Ed25519 key before). No broker API calls after bootstrap, no Parafe account required.
+Standalone npm package that verifies Parafe credentials (JWT and SD-JWT VC), consent tokens, presentation proofs and receipts (v2 JWS and v1 signed JSON) offline against Parafe's published keys (JWKS: ES256 since 2026-09-30, the retired Ed25519 key before). No Parafe account and no broker API calls; key fetches (JWKS, refreshed every 24 h, and agents' DID documents for action receipts and proofs) are the only network use, none with `staticJwks()`. Offline checks can't see revocation (README).
 
 This is the **neutrality proof point** — any party receiving a Parafe artifact can verify it cryptographically without trusting Parafe for the verification step.
 
@@ -24,9 +24,9 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/internal/base64.ts` — base64 / base64url helpers.
 - `tests/unit/` — vitest unit tests against committed fixtures.
 - `tests/integration/` — vitest integration tests against staging broker.
-- `tests/fixtures/` — Committed artifacts: two production v1 receipts (verified against production's Ed25519 key), a set of v2 artifacts with their JWKS from a local Phase 1 broker, and `broker-phase2-artifacts.json` (action receipts, acknowledgments, a session receipt listing them, DID documents) from a local Phase 2 broker.
+- `tests/fixtures/` — Committed artifacts: two production v1 receipts (verified against production's Ed25519 key), a set of v2 artifacts with their JWKS from a local Phase 1 broker, `broker-phase2-artifacts.json` (action receipts, acknowledgments, a session receipt listing them, DID documents) from a local Phase 2 broker, and `broker-operator-principal-artifacts.json` (credentials and tokens with operator and principal).
 - `tests/fixtures/ap2-*.json` — AP2 vectors: `ap2-sdk-vectors.json` (minted and verified by the AP2 Python SDK; regenerate with `tests/scripts/generate-ap2-vectors.py`, instructions inside), the spec's encoded examples, and AP2 PR #307's golden vectors.
-- `tests/scripts/generate-fixtures.ts` — Regenerates fixtures from a running broker. `generate-phase2-fixtures.ts` writes the Phase 2 fixture (`npx tsx`).
+- `tests/scripts/generate-fixtures.ts` — Regenerates fixtures from a running broker. `generate-phase2-fixtures.ts` and `generate-operator-principal-fixtures.ts` write the Phase 2 and operator/principal fixtures (`npx tsx`).
 
 ## Running
 
@@ -43,15 +43,15 @@ npm run fixtures:generate  # Regenerate fixtures against a broker
 
 ## Key Design Decisions
 
-- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests + `@sd-jwt/core` for AP2 SD-JWT decoding. Works in Node 18+ and all modern browsers without polyfills.
+- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests + `@sd-jwt/core` for AP2 SD-JWT decoding. CI tests Node 20 (`test.yml`); `publish.yml` runs Node 22. `require()` needs Node 20.19+/22.12+; Ed25519 (v1 receipts) fails on Node 18 (no `globalThis.crypto` for `ed.verifyAsync`); browsers must use `staticJwks()` (the broker JWKS has no CORS). CODE_REVIEW P-52.
 - **Byte-for-byte parity with broker (v1 only)** — `canonicalize.ts` must produce identical output to the broker's v1 receipt canonicalizer (`broker/src/routes/receipt.js`, `canonicalizeV1`). v2 receipts are JWS: no canonicalization.
 - **VerifyResult instead of throwing** — Signature and claim failures populate `result.error` rather than throwing. Only key-fetch and key-pinning failures throw (caller can't meaningfully treat those as "signature invalid").
 - **Auto-detect format** — JWT string vs signed receipt JSON (as issued, or an SDK 0.3.2+ receipt's `issued` field) is detected from structure. Explicit variants (`verifyCredentialJWT`, `verifySignedReceipt`) exist for power users.
 - **No W3C VCs** — the broker stopped issuing `*_vdc` fields on 2026-09-29 (they failed standard VC verification), and 0.2.0 removed VDC verification. Don't add it back; the standard format is the SD-JWT VC credential (0.3.0).
-- **Pinning by key_id and/or SHA-256 thumbprint** — Optional, layered on top of `createPublicKeySource`.
+- **Pinning by key_id and/or SHA-256 thumbprint** — Optional, layered on top of `createPublicKeySource`. Known gap (CODE_REVIEW S-66): `keyId` trusts the JWKS's `kid` labels (no RFC 7638 check) and `thumbprintSha256` applies only to the legacy Ed25519 key.
 
 ## When Making Changes
 
 - `canonicalize` is load-bearing. If you modify it, run the golden-vector tests and regenerate fixtures against the broker.
-- Runtime type guards (pattern from `parafe-A2A-extension/src/verification.ts:60-77`) are required after any `jose.jwtVerify()` cast.
+- Runtime type guards (pattern from `parafe-a2a-extension/src/verification.ts`, the claim type guards in `verifyConsentTokenOffline`) are required after any `jose.jwtVerify()` cast.
 - Any new verification path must have both a "valid" test and a "tampered" negative test.
