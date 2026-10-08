@@ -62,11 +62,13 @@ suite('integration: full handshake lifecycle against a live broker', () => {
     return signup.api_key.key;
   }
 
-  async function register(apiKey: string, name: string, publicKeyBase64: string, extra: Record<string, unknown> = {}) {
+  // Since 2026-10-08 registration carries a proof signed by the key being registered.
+  async function register(apiKey: string, name: string, agent: { privateKey: KeyObject; publicKeyBase64: string }, extra: Record<string, unknown> = {}) {
     return post<{ agent_id: string; did: string; credential: string; credential_sd_jwt: string }>(
       '/agents/register',
-      { agent_name: `${name}-${Date.now().toString(36)}`, principal_name: 'Verify Integration', public_key: publicKeyBase64, ...extra },
-      apiKey
+      { agent_name: `${name}-${Date.now().toString(36)}`, principal_name: 'Verify Integration', public_key: agent.publicKeyBase64, ...extra },
+      apiKey,
+      { 'Parafe-PoP': await proof(agent.privateKey, { htm: 'POST', htu: `${BROKER_URL}/agents/register` }) }
     );
   }
 
@@ -76,8 +78,8 @@ suite('integration: full handshake lifecycle against a live broker', () => {
 
     const initiator = freshAgent();
     const target = freshAgent();
-    const initReg = await register(apiKey, 'integ-initiator', initiator.publicKeyBase64);
-    const targReg = await register(apiKey, 'integ-target', target.publicKeyBase64, {
+    const initReg = await register(apiKey, 'integ-initiator', initiator);
+    const targReg = await register(apiKey, 'integ-target', target, {
       scope_policies: { 'read-profile': { permissions: ['read_profile'], exclusions: ['delete_profile'] } },
     });
 
@@ -160,7 +162,7 @@ suite('integration: full handshake lifecycle against a live broker', () => {
 
     // Fetch the key once, then verify N times without touching fetch again.
     const apiKey = await signupApiKey('offline');
-    const reg = await register(apiKey, 'offline', freshAgent().publicKeyBase64);
+    const reg = await register(apiKey, 'offline', freshAgent());
 
     await verifyCredential(reg.credential, { key });
     await verifyCredential(reg.credential, { key });

@@ -10,7 +10,7 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/types.ts` — Public interfaces (claims, VerifyResult, options).
 - `src/errors.ts` — VerifyError hierarchy with stable `code`s.
 - `src/canonicalize.ts` — Deterministic JSON stringify (alphabetical key sort). Exported.
-- `src/keys.ts` — PublicKeySource abstraction: fetch+cache the broker JWKS (falls back to /public-key), `staticJwks`, `staticKey` (Ed25519 only), pinning.
+- `src/keys.ts` — PublicKeySource abstraction: fetch+cache the broker JWKS (falls back to /public-key; refuses an entry whose `kid` isn't its RFC 7638 thumbprint), `staticJwks`, `staticKey` (Ed25519 only), pinning.
 - `src/internal/broker-key.ts` — picks the broker key for a JWS header (`kid`, DID-URL kid, or no kid = legacy Ed25519).
 - `src/receipt-jws.ts` — v2 receipt (JWS) verification.
 - `src/presentation.ts` — presentation proof (B7) verification against a consent token's `cnf.jkt`.
@@ -20,7 +20,7 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/jwt-verify.ts` — Credential + consent JWT verification via jose.
 - `src/receipt-verify.ts` — v1 receipts: raw Ed25519 verification of canonicalized receipt JSON.
 - `src/verify.ts` — Auto-detect façade.
-- `src/internal/ed25519.ts` — Isomorphic Ed25519 via @noble/ed25519.
+- `src/internal/ed25519.ts` — Isomorphic Ed25519 via @noble/ed25519: the synchronous `verify` with @noble/hashes' sha512, so no WebCrypto is needed.
 - `src/internal/base64.ts` — base64 / base64url helpers.
 - `tests/unit/` — vitest unit tests against committed fixtures.
 - `tests/integration/` — vitest integration tests against staging broker.
@@ -32,7 +32,7 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 
 ```bash
 npm install
-npm run build          # tsup → ESM + CJS + types
+npm run build          # tsup (tsup.config.ts) → ESM + CJS + types
 npm test               # Unit tests (no network)
 npm run test:integration   # Integration tests (requires PARAFE_TEST_BROKER_URL)
 npm run typecheck      # TS strict mode
@@ -43,12 +43,12 @@ npm run fixtures:generate  # Regenerate fixtures against a broker
 
 ## Key Design Decisions
 
-- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests + `@sd-jwt/core` for AP2 SD-JWT decoding. CI tests Node 20 (`test.yml`); `publish.yml` runs Node 22. `require()` needs Node 20.19+/22.12+; Ed25519 (v1 receipts) fails on Node 18 (no `globalThis.crypto` for `ed.verifyAsync`); browsers must use `staticJwks()` (the broker JWKS has no CORS). CODE_REVIEW P-52.
+- **Single isomorphic implementation** — `jose` for JWTs/JWS (ES256, EdDSA) + `@noble/ed25519` for v1 receipt sigs + `@noble/hashes` for SD-JWT digests + `@sd-jwt/core` for AP2 SD-JWT decoding. CI tests Node 20 (`test.yml`); `publish.yml` runs Node 22. Node 18 works, with `import` and `require()`, but is checked by hand only (vitest 4 needs Node 20). `@noble/ed25519` is ESM-only, so `tsup.config.ts` bundles it into the CJS build (and only that build): add any other ESM-only dependency there too. v1 Ed25519 verification uses noble's synchronous `verify`, because `verifyAsync` needs `globalThis.crypto`, which Node 18 lacks. In browsers the JWKS and DID document fetches rely on the broker's open CORS for its public reads (since 2026-10-08; before, browsers needed `staticJwks()`). CODE_REVIEW P-52.
 - **Byte-for-byte parity with broker (v1 only)** — `canonicalize.ts` must produce identical output to the broker's v1 receipt canonicalizer (`broker/src/routes/receipt.js`, `canonicalizeV1`). v2 receipts are JWS: no canonicalization.
 - **VerifyResult instead of throwing** — Signature and claim failures populate `result.error` rather than throwing. Only key-fetch and key-pinning failures throw (caller can't meaningfully treat those as "signature invalid").
 - **Auto-detect format** — JWT string vs signed receipt JSON (as issued, or an SDK 0.3.2+ receipt's `issued` field) is detected from structure. Explicit variants (`verifyCredentialJWT`, `verifySignedReceipt`) exist for power users.
 - **No W3C VCs** — the broker stopped issuing `*_vdc` fields on 2026-09-29 (they failed standard VC verification), and 0.2.0 removed VDC verification. Don't add it back; the standard format is the SD-JWT VC credential (0.3.0).
-- **Pinning by key_id and/or SHA-256 thumbprint** — Optional, layered on top of `createPublicKeySource`. Known gap (CODE_REVIEW S-66): `keyId` trusts the JWKS's `kid` labels (no RFC 7638 check) and `thumbprintSha256` applies only to the legacy Ed25519 key.
+- **Pinning by key_id and/or SHA-256 thumbprint** — Optional: `createPublicKeySource({ pin })` or `pinKey()`. Both fields filter the JWKS keys (`pinKeySet`) and check the Ed25519 key (`enforcePin`). `buildKeySet` refuses (KEY_FETCH_FAILED) a JWKS entry whose `kid` isn't the key's RFC 7638 thumbprint, so `keyId` names a key, not a label (CODE_REVIEW S-66). `thumbprintSha256` is the hex SHA-256 of the base64 SPKI DER string (`computeKeyThumbprint`, `ResolvedJwk.thumbprintSha256`). Test JWKS need real kids (`calculateJwkThumbprint`).
 
 ## When Making Changes
 

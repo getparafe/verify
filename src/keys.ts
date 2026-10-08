@@ -1,4 +1,4 @@
-import { importSPKI, importJWK, type KeyLike, type JWK } from 'jose';
+import { importSPKI, importJWK, calculateJwkThumbprint, type KeyLike, type JWK } from 'jose';
 import { sha256 } from '@noble/hashes/sha256';
 import { KeyFetchError, KeyPinningError } from './errors.js';
 import { derBase64ToPem, rawEd25519FromSpkiDer, bytesToBase64, base64UrlToBytes } from './internal/base64.js';
@@ -21,11 +21,14 @@ export interface ResolvedPublicKey {
 
 /** One broker signing key from the JWKS, ready to verify with. */
 export interface ResolvedJwk {
+  /** The key's RFC 7638 JWK thumbprint (checked when the JWKS is loaded). */
   kid: string;
   alg: 'ES256' | 'EdDSA' | string;
   status: 'active' | 'retired' | string;
   jwk: JWK;
   josePublicKey: KeyLike | Uint8Array;
+  /** SHA-256 of the key's base64 SPKI DER, hex-encoded: the value `pin.thumbprintSha256` matches. */
+  thumbprintSha256?: string;
 }
 
 export interface PublicKeySource {
@@ -52,9 +55,14 @@ export interface Jwks {
   keys: Array<JWK & { kid: string; alg?: string; status?: string }>;
 }
 
+/**
+ * Pins one broker key. Both fields apply to the JWKS keys (`resolveKeySet`)
+ * and to the Ed25519 key (`resolve`); keys that don't match aren't used.
+ */
 export interface KeyPin {
+  /** The key's `kid`. A JWKS kid is the key's RFC 7638 thumbprint, checked on load, so this names the key itself. */
   keyId?: string;
-  /** Hex-encoded SHA-256 of the base64 SPKI DER */
+  /** Hex-encoded SHA-256 of the base64 SPKI DER (see `computeKeyThumbprint`, `ResolvedJwk.thumbprintSha256`) */
   thumbprintSha256?: string;
 }
 
@@ -73,26 +81,60 @@ export interface PublicKeySourceOptions {
 
 const DEFAULT_BROKER_URL = 'https://api.parafe.ai';
 const ED25519_SPKI_PREFIX = 'MCowBQYDK2VwAyEA'; // base64 of the 12-byte Ed25519 SPKI header
+const P256_SPKI_PREFIX = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE'; // base64 of the 27-byte P-256 SPKI header, through the 0x04 point tag
 
 /** Base64 SPKI DER for a raw Ed25519 key given as JWK `x`. */
 function ed25519SpkiFromX(x: string): string {
   const raw = base64UrlToBytes(x);
   return bytesToBase64(new Uint8Array([...base64ToBytesStrict(ED25519_SPKI_PREFIX), ...raw]));
 }
+/** Base64 SPKI DER for a JWKS key (Ed25519 or P-256). */
+function spkiFromJwk(jwk: JWK): string {
+  if (jwk.kty === 'OKP' && typeof jwk.x === 'string') return ed25519SpkiFromX(jwk.x);
+  if (jwk.kty === 'EC' && typeof jwk.x === 'string' && typeof jwk.y === 'string') {
+    return bytesToBase64(new Uint8Array([...base64ToBytesStrict(P256_SPKI_PREFIX), ...base64UrlToBytes(jwk.x), ...base64UrlToBytes(jwk.y)]));
+  }
+  throw new Error(`Unsupported JWK (kty "${jwk.kty}")`);
+}
 function base64ToBytesStrict(b64: string): Uint8Array {
   const bin = atob(b64);
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
-async function buildKeySet(jwks: Jwks): Promise<ResolvedJwk[]> {
+async function buildKeySet(jwks: Jwks, from = 'staticJwks()'): Promise<ResolvedJwk[]> {
   if (!jwks || !Array.isArray(jwks.keys)) throw new Error('JWKS must have a keys array');
   return Promise.all(jwks.keys.map(async (k) => {
     const alg = k.alg ?? (k.kty === 'OKP' ? 'EdDSA' : 'ES256');
     if (alg !== 'ES256' && alg !== 'EdDSA') throw new Error(`Unsupported broker key algorithm "${alg}"`);
     const { kty, crv, x, y } = k;
     const jwk = (y ? { kty, crv, x, y } : { kty, crv, x }) as JWK;
-    return { kid: k.kid, alg, status: k.status ?? 'active', jwk, josePublicKey: await importJWK(jwk, alg) };
+    const josePublicKey = await importJWK(jwk, alg);
+    // Every broker kid is the key's RFC 7638 thumbprint. Checking it makes a
+    // kid (and a keyId pin) name the key itself: a substituted JWKS can't label
+    // its own key with a real kid (S-66).
+    const thumbprint = await calculateJwkThumbprint(jwk, 'sha256');
+    if (k.kid !== thumbprint) {
+      throw new KeyFetchError(from, `JWKS key "${k.kid}" refused: its kid is not the key's RFC 7638 thumbprint (${thumbprint})`);
+    }
+    return { kid: k.kid, alg, status: k.status ?? 'active', jwk, josePublicKey, thumbprintSha256: hexThumbprint(spkiFromJwk(jwk)) };
   }));
+}
+
+/** The keys of a set that a pin allows. Throws KEY_PIN_MISMATCH when none is left. */
+function pinKeySet(set: ResolvedJwk[], pin?: KeyPin): ResolvedJwk[] {
+  let kept = set;
+  if (pin?.keyId !== undefined) {
+    kept = kept.filter((k) => k.kid === pin.keyId);
+    if (!kept.length) throw new KeyPinningError('keyId', pin.keyId, set.map((k) => k.kid).join(', '));
+  }
+  if (pin?.thumbprintSha256 !== undefined) {
+    const expected = pin.thumbprintSha256.toLowerCase();
+    const prints = kept.map((k) => (k.thumbprintSha256 ?? hexThumbprint(spkiFromJwk(k.jwk))).toLowerCase());
+    const matching = kept.filter((_, i) => prints[i] === expected);
+    if (!matching.length) throw new KeyPinningError('thumbprintSha256', expected, prints.join(', '));
+    kept = matching;
+  }
+  return kept;
 }
 
 /** The legacy Ed25519 key (as ResolvedPublicKey) from a key set. */
@@ -170,7 +212,7 @@ export function createPublicKeySource(opts: PublicKeySourceOptions = {}): Public
     if (jwks.body) {
       let set: ResolvedJwk[];
       try {
-        set = await buildKeySet(jwks.body as Jwks);
+        set = await buildKeySet(jwks.body as Jwks, jwksUrl);
       } catch (err) {
         throw new KeyFetchError(jwksUrl, `Unexpected JWKS: ${err instanceof Error ? err.message : String(err)}`, jwks.status, err);
       }
@@ -217,16 +259,11 @@ export function createPublicKeySource(opts: PublicKeySourceOptions = {}): Public
     },
     async resolveKeySet(): Promise<ResolvedJwk[]> {
       const { set, legacy } = await load();
-      if (set) {
-        if (pin?.keyId !== undefined && !set.some((k) => k.kid === pin.keyId)) {
-          throw new KeyPinningError('keyId', pin.keyId, set.map((k) => k.kid).join(', '));
-        }
-        return pin?.keyId !== undefined ? set.filter((k) => k.kid === pin.keyId) : set;
-      }
+      if (set) return pinKeySet(set, pin);
       // Pre-JWKS broker: its single Ed25519 key, with no kid.
       if (!legacy) return [];
       enforcePin(legacy, pin);
-      return [{ kid: legacy.keyId, alg: 'EdDSA', status: 'active', jwk: { kty: 'OKP', crv: 'Ed25519', x: '' } as JWK, josePublicKey: legacy.josePublicKey }];
+      return [{ kid: legacy.keyId, alg: 'EdDSA', status: 'active', jwk: { kty: 'OKP', crv: 'Ed25519', x: '' } as JWK, josePublicKey: legacy.josePublicKey, thumbprintSha256: legacy.thumbprintSha256 }];
     },
     async refresh(): Promise<boolean> {
       if (inflight) {
@@ -290,14 +327,8 @@ export function pinKey(source: PublicKeySource, pin: KeyPin): PublicKeySource {
   };
   if (source.resolveKeySet) {
     const inner = source.resolveKeySet.bind(source);
-    // A keyId pin restricts the JWKS to that kid.
-    pinned.resolveKeySet = async () => {
-      const set = await inner();
-      if (pin.keyId === undefined) return set;
-      const kept = set.filter((k) => k.kid === pin.keyId);
-      if (!kept.length) throw new KeyPinningError('keyId', pin.keyId, set.map((k) => k.kid).join(', '));
-      return kept;
-    };
+    // The pin restricts the JWKS to the key it names.
+    pinned.resolveKeySet = async () => pinKeySet(await inner(), pin);
   }
   return pinned;
 }

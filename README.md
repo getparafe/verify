@@ -16,7 +16,7 @@ No account. No permission. With `staticJwks()`, no network at all. `createPublic
 
 **What offline verification can't tell you.** A valid result means Parafe signed the artifact, it is unaltered and it hasn't expired. It can't see revocation: a credential or consent token that verifies here may belong to an agent revoked since (there is no status list yet). Consent tokens last 5 minutes and credentials 30 days, which bounds the gap. When it matters, ask the broker: `POST /consent/verify` refuses tokens of a revoked agent, and an agent's DID document (`/agents/<id>/did.json`) answers 404 once it is revoked or suspended.
 
-**Platforms.** CI tests Node 20; releases are tested on Node 22. `require()` needs Node 20.19+ or 22.12+ (a dependency is ESM-only), and on Node 18 v1 (Ed25519) receipts fail to verify. In a browser, pass the keys with `staticJwks()`: the broker's JWKS doesn't allow cross-origin fetches.
+**Platforms.** Node 18 and later, with `import` or `require()`: the CommonJS build bundles the one ESM-only dependency, and v1 (Ed25519) receipts verify without WebCrypto. CI tests Node 20 and releases are tested on Node 22; Node 18 is checked by hand, not in CI. Browsers work too: since 2026-10-08 the broker's JWKS and agents' DID documents allow cross-origin reads, so `createPublicKeySource` can fetch them from a web page (against an older broker, pass the keys with `staticJwks()`).
 
 ## Install
 
@@ -48,7 +48,7 @@ Same pattern for `verifyCredential(credential, { key })` and `verifyConsent(toke
 
 ## How verification works
 
-1. Fetch Parafe's keys once: the JWKS at `https://api.parafe.ai/.well-known/jwks.json` (the active ES256 key and retired keys, which stay published forever). A broker from before 2026-09-30 has only `/public-key`; that's used instead.
+1. Fetch Parafe's keys once: the JWKS at `https://api.parafe.ai/.well-known/jwks.json` (the active ES256 key and retired keys, which stay published forever). Each `kid` must be its key's RFC 7638 thumbprint; a JWKS where one isn't is refused. A broker from before 2026-09-30 has only `/public-key`; that's used instead.
 2. Cache them (see "Key pinning" below for what pinning does and doesn't protect).
 3. Every artifact names its key (`kid`, or no `kid` for the pre-2026-09-30 Ed25519 key). Verification is a pure signature check against the cached key — no network call, no Parafe API. If an artifact names a key the cache doesn't have yet (the broker added or rotated a key), `createPublicKeySource` refetches the JWKS once and retries, at most once a minute (`minRefetchIntervalMs`).
 
@@ -164,21 +164,22 @@ Signature/claim failures populate `result.error` rather than throwing. Key-fetch
 | `KEY_NOT_FOUND` | The artifact names a `kid` the broker doesn't publish, or an ES256 artifact met an Ed25519-only `staticKey()` |
 | `PROOF_INVALID` | A presentation proof didn't check out (`verifyPresentationProof`) |
 | `AP2_MANDATE_INVALID` | An AP2 mandate didn't verify (`verifyAp2Mandate`, `verifyAp2Chain`) |
-| `KEY_FETCH_FAILED` | (throws) — broker unreachable or returned bad data |
-| `KEY_PIN_MISMATCH` | (throws) — `key_id` or thumbprint doesn't match pinning |
+| `KEY_FETCH_FAILED` | (throws) — broker unreachable or returned bad data, including a JWKS entry whose `kid` isn't its key's RFC 7638 thumbprint |
+| `KEY_PIN_MISMATCH` | (throws) — no broker key matches the pin's `keyId` or thumbprint |
 
 ## Key pinning and air-gapped use
 
 ```ts
 import { createPublicKeySource, staticJwks, staticKey } from '@getparafe/verify/keys';
 
-// Restrict verification to one JWKS entry
+// Trust one broker key, named by its kid (the key's RFC 7638 thumbprint)
 const key = createPublicKeySource({
   brokerUrl: 'https://api.parafe.ai',
   pin: { keyId: '<kid from /.well-known/jwks.json>' }
 });
 
-// Pin the retired Ed25519 key by the hex SHA-256 of its base64 SPKI string
+// Or by the hex SHA-256 of its base64 SPKI DER string (computeKeyThumbprint;
+// resolveKeySet() lists each key's thumbprintSha256)
 const pinned = createPublicKeySource({
   pin: { thumbprintSha256: '…hex…' }
 });
@@ -188,7 +189,14 @@ const offline = staticJwks(jwksJson);               // everything
 const legacyOnly = staticKey(base64SpkiDer);        // Ed25519 artifacts from before 2026-09-30
 ```
 
-**What pinning protects, in 0.6.0.** `keyId` picks which JWKS entry is used, but it trusts the JWKS's own labels: a substituted JWKS that gives another key the pinned `kid` passes. `thumbprintSha256` applies only to the retired Ed25519 key. So neither protects the ES256 keys against a substituted key source (Parafé finding S-66; a fix is planned). To fix the keys you trust, ship the JWKS with `staticJwks()`.
+**What pinning protects.** A pin names one broker key, and no other broker key verifies anything. It applies to the JWKS keys and to the Ed25519 key alike: an artifact signed with another key fails with `KEY_NOT_FOUND`, or, for a v1 receipt or an artifact with no `kid` (the Ed25519 key), the call throws `KEY_PIN_MISMATCH`. If the pinned key isn't among the keys at all, every call throws `KEY_PIN_MISMATCH`.
+
+- `keyId` names the key itself, not a label: every Parafé `kid` is its key's RFC 7638 thumbprint, and a JWKS (fetched, or passed to `staticJwks()`) whose entry has a `kid` that isn't its key's thumbprint is refused with `KEY_FETCH_FAILED`. So a substituted JWKS can't put another key under the pinned `kid`. That check also runs without a pin.
+- `thumbprintSha256` is the hex SHA-256 of the key's base64 SPKI DER string, as before; it now pins an ES256 key too.
+- A pinned key has to be re-pinned when Parafé rotates it. Without a pin, `createPublicKeySource` trusts the keys the broker URL serves over TLS. `staticJwks()` trusts the JWKS you ship.
+- `pinKey()` applies the same rules on top of any source. It relies on that source's `kid`s, which the built-in sources check; a `resolveKeySet` you write yourself has to check them too.
+
+In 0.6.0 and earlier, `keyId` only matched the JWKS's own label and `thumbprintSha256` applied only to the Ed25519 key, so neither pinned the ES256 keys (Parafé finding S-66).
 
 ## Verifying signatures yourself
 

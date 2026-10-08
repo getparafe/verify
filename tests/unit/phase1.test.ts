@@ -30,6 +30,20 @@ describe('v1 receipts from production still verify', () => {
       expect(bad.valid).toBe(false);
     });
   }
+
+  it('verify without WebCrypto (Node 18 has no globalThis.crypto; P-52)', async () => {
+    vi.stubGlobal('crypto', undefined);
+    try {
+      expect(globalThis.crypto).toBeUndefined();
+      for (const name of ['production-v1-receipt-rcpt_5ecddf49.json', 'production-v1-receipt-rcpt_e13da133.json']) {
+        const receipt = JSON.parse(readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8'));
+        expect((await verifyReceipt(receipt, { key: staticKey(PRODUCTION_ED25519) })).valid).toBe(true);
+        expect((await verifyReceipt({ ...receipt, session_id: 'sess_tampered' }, { key: staticKey(PRODUCTION_ED25519) })).valid).toBe(false);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('broker keys by kid (B10)', () => {
@@ -48,14 +62,15 @@ describe('broker keys by kid (B10)', () => {
 
   it('refetches the JWKS once when an artifact names a kid it does not have, rate-limited', async () => {
     const extra = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    const extraJwk = { ...(extra.publicKey.export({ format: 'jwk' }) as JWK), kid: 'added-later', alg: 'ES256', status: 'active' };
+    const addedKid = await calculateJwkThumbprint(extra.publicKey.export({ format: 'jwk' }) as JWK); // a broker kid is the RFC 7638 thumbprint
+    const extraJwk = { ...(extra.publicKey.export({ format: 'jwk' }) as JWK), kid: addedKid, alg: 'ES256', status: 'active' };
     let calls = 0;
     const fetchMock = vi.fn(async () => {
       calls++;
       return new Response(JSON.stringify(calls === 1 ? fx.jwks : { keys: [...fx.jwks.keys, extraJwk] }), { status: 200 });
     }) as unknown as typeof fetch;
     const token = await new SignJWT({ token_type: 'consent', scope: 's', permissions: [], session_id: 's' })
-      .setProtectedHeader({ alg: 'ES256', kid: 'added-later' }).setIssuer('parafe-trust-broker').setIssuedAt().setExpirationTime('1h').sign(extra.privateKey);
+      .setProtectedHeader({ alg: 'ES256', kid: addedKid }).setIssuer('parafe-trust-broker').setIssuedAt().setExpirationTime('1h').sign(extra.privateKey);
     const source = createPublicKeySource({ brokerUrl: 'https://broker.test', fetch: fetchMock, minRefetchIntervalMs: 0 });
     await source.resolve();
     expect((await verifyConsent(token, { key: source })).valid).toBe(true);
