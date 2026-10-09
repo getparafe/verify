@@ -11,7 +11,7 @@ describe('verifyCredentialJWT', () => {
     const result = await verifyCredentialJWT(jwt, { key: kr.keySource });
     expect(result.valid).toBe(true);
     expect(result.format).toBe('jwt');
-    expect(result.keyId).toBe(kr.keyId);
+    expect(result.keyId).toBe(kr.esKeyId);
     expect(result.claims?.sub).toBe('prf_agent_x');
     expect(result.error).toBeUndefined();
   });
@@ -65,7 +65,22 @@ describe('verifyCredentialJWT', () => {
     const jwt = await mintCredential({ privateKey: signerKr.joseSigningKey });
     const result = await verifyCredentialJWT(jwt, { key: verifierKr.keySource });
     expect(result.valid).toBe(false);
-    expect(result.error?.code).toBe('INVALID_SIGNATURE');
+    // Its kid isn't the verifier's key.
+    expect(result.error?.code).toBe('KEY_NOT_FOUND');
+  });
+
+  it('refuses a token signed with the retired Ed25519 key (S-72), and a tampered one', async () => {
+    const kr = await createTestKeyring();
+    const { importPKCS8, SignJWT } = await import('jose');
+    const edKey = await importPKCS8(kr.nodePrivateKey.export({ format: 'pem', type: 'pkcs8' }) as string, 'EdDSA');
+    const old = await new SignJWT({ sub: 'prf_agent_old', name: 'Old', identity_assurance: 'registered', verification_tier: 'unverified', pub_key_thumbprint: 'a'.repeat(64) })
+      .setProtectedHeader({ alg: 'EdDSA' }).setIssuer('parafe-trust-broker').setIssuedAt().setExpirationTime('1h').sign(edKey);
+    const r = await verifyCredentialJWT(old, { key: kr.keySource });
+    expect(r.valid).toBe(false);
+    expect(r.error?.code).toBe('INVALID_SIGNATURE');
+    expect(r.error?.message).toMatch(/retired Ed25519 key/);
+    // The same key still checks v1 receipts.
+    expect((await kr.keySource.resolve()).algorithm).toBe('Ed25519');
   });
 
   it('rejects a consent token passed to verifyCredential', async () => {

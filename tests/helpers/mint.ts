@@ -1,6 +1,6 @@
-import { generateKeyPair, exportSPKI, SignJWT, type KeyLike } from 'jose';
+import { generateKeyPair, exportSPKI, exportJWK, calculateJwkThumbprint, SignJWT, type KeyLike } from 'jose';
 import { createPrivateKey, createPublicKey, sign as nodeSign, generateKeyPairSync, type KeyObject } from 'node:crypto';
-import { staticKey, type PublicKeySource } from '../../src/keys.js';
+import { staticJwks, type PublicKeySource } from '../../src/keys.js';
 import { canonicalize } from '../../src/canonicalize.js';
 
 /**
@@ -9,7 +9,11 @@ import { canonicalize } from '../../src/canonicalize.js';
  * against the same public key the real broker would expose.
  */
 export interface TestKeyring {
+  /** ES256: the broker signs tokens with it (the retired Ed25519 key signs none, S-72). */
   joseSigningKey: KeyLike;
+  /** Its kid (RFC 7638 thumbprint), named in every minted token's header. */
+  esKeyId: string;
+  /** The Ed25519 key, for v1 receipts. */
   josePublicKey: KeyLike;
   nodePrivateKey: KeyObject;
   nodePublicKey: KeyObject;
@@ -26,18 +30,25 @@ export async function createTestKeyring(keyId = 'test-signing-key-v1'): Promise<
 
   const publicKeyBase64Der = pemToBase64Der(publicKeyPem);
 
-  // Re-import through jose so the JWT path works with the same key material.
-  const { importSPKI, importPKCS8 } = await import('jose');
+  const { importSPKI } = await import('jose');
   const josePublicKey = await importSPKI(publicKeyPem, 'EdDSA');
-  const joseSigningKey = await importPKCS8(privateKeyPem, 'EdDSA');
+
+  // Tokens: ES256, as the broker signs them since 2026-09-30.
+  const es = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const esJwk = await exportJWK(es.publicKey);
+  const esKeyId = await calculateJwkThumbprint(esJwk);
+  const edJwk = await exportJWK(nodePublicKey);
+  const edKid = await calculateJwkThumbprint(edJwk);
+  KID.set(es.privateKey, esKeyId);
 
   return {
-    joseSigningKey: joseSigningKey as KeyLike,
+    joseSigningKey: es.privateKey as unknown as KeyLike,
+    esKeyId,
     josePublicKey: josePublicKey as KeyLike,
     nodePrivateKey: createPrivateKey(privateKeyPem),
     nodePublicKey: createPublicKey(publicKeyPem),
     publicKeyBase64Der,
-    keySource: staticKey(publicKeyBase64Der, keyId),
+    keySource: staticJwks({ keys: [{ ...esJwk, kid: esKeyId, alg: 'ES256' }, { ...edJwk, kid: edKid, alg: 'EdDSA' }] } as never),
     keyId,
   };
 }
@@ -58,6 +69,13 @@ export async function _joseKeygen(): Promise<KeyLike> {
 void exportSPKI;
 
 const PARAFE_JWT_ISSUER = 'parafe-trust-broker';
+
+/** A keyring's ES256 key → its kid, so minted tokens name it as the broker's do. */
+const KID = new WeakMap<object, string>();
+function header(privateKey: KeyLike): { alg: 'ES256'; kid?: string } {
+  const kid = KID.get(privateKey as object);
+  return kid ? { alg: 'ES256', kid } : { alg: 'ES256' };
+}
 
 // ─────────────── JWT minting ───────────────
 
@@ -93,7 +111,7 @@ export async function mintCredential(input: MintCredentialInput): Promise<string
   };
   for (const k of input.omit ?? []) delete claims[k];
   const builder = new SignJWT(claims)
-    .setProtectedHeader({ alg: 'EdDSA' })
+    .setProtectedHeader(header(input.privateKey))
     .setIssuedAt(now)
     .setExpirationTime(exp)
     .setIssuer(input.iss ?? PARAFE_JWT_ISSUER);
@@ -129,7 +147,7 @@ export async function mintConsent(input: MintConsentInput): Promise<string> {
     target_agent_id: input.target_agent_id ?? 'prf_agent_target',
     parent_token_id: null,
   })
-    .setProtectedHeader({ alg: 'EdDSA' })
+    .setProtectedHeader(header(input.privateKey))
     .setIssuedAt(now)
     .setExpirationTime(exp)
     .setIssuer(input.iss ?? PARAFE_JWT_ISSUER)

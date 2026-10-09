@@ -212,7 +212,7 @@ const data = canonicalize(receiptWithoutSignature);
 // feed `data` + signature + public key into your Ed25519 verifier of choice
 ```
 
-Credentials and consent tokens verify with ES256 or EdDSA (the retired key; no date cutoff is enforced). v2 receipts, index acknowledgments and the SD-JWT VC verify with ES256 only.
+Credentials, consent tokens, v2 receipts, index acknowledgments and the SD-JWT VC verify with ES256 only. Since 0.7.0 a token signed with the retired Ed25519 key (EdDSA, before 2026-09-30) is refused (`INVALID_SIGNATURE`): Parafé stopped accepting them on 2026-10-09. That key still checks v1 receipts.
 
 ## Release notes
 

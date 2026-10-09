@@ -1,6 +1,6 @@
 # @getparafe/verify
 
-Standalone npm package that verifies Parafe credentials (JWT and SD-JWT VC), consent tokens, presentation proofs and receipts (v2 JWS and v1 signed JSON) offline against Parafe's published keys (JWKS: ES256 since 2026-09-30, the retired Ed25519 key before). No Parafe account and no broker API calls; key fetches (JWKS, refreshed every 24 h, and agents' DID documents for action receipts and proofs) are the only network use, none with `staticJwks()`. Offline checks can't see revocation (README).
+Standalone npm package that verifies Parafe credentials (JWT and SD-JWT VC), consent tokens, presentation proofs and receipts (v2 JWS and v1 signed JSON) offline against Parafe's published keys (JWKS: ES256 since 2026-09-30; the retired Ed25519 key checks v1 receipts only, and tokens it signed are refused since 0.7.0). No Parafe account and no broker API calls; key fetches (JWKS, refreshed every 24 h, and agents' DID documents for action receipts and proofs) are the only network use, none with `staticJwks()`. Offline checks can't see revocation (README).
 
 This is the **neutrality proof point** — any party receiving a Parafe artifact can verify it cryptographically without trusting Parafe for the verification step.
 

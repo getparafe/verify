@@ -1,4 +1,4 @@
-import { jwtVerify, decodeJwt, errors as joseErrors } from 'jose';
+import { jwtVerify, decodeJwt, decodeProtectedHeader, errors as joseErrors } from 'jose';
 import {
   ExpiredArtifactError,
   InvalidSignatureError,
@@ -24,17 +24,24 @@ async function verifyJwtInner<T>(
 ): Promise<VerifyResult<T>> {
   const expectedIssuer = opts.expectedIssuer ?? DEFAULT_JWT_ISSUER;
   const verifiedAt = (opts.now ?? new Date()).toISOString();
-  // The broker signs ES256 since 2026-09-30 (kid in the header); EdDSA before.
+  // The broker signs ES256 since 2026-09-30 (kid in the header). Tokens signed
+  // with the retired Ed25519 key (EdDSA) are refused since 2026-10-09 (broker
+  // S-72): that key only checks v1 receipts.
   let keyId: string | undefined;
 
   const verifyOpts: Parameters<typeof jwtVerify>[2] = {
-    algorithms: ['ES256', 'EdDSA'],
+    algorithms: ['ES256'],
     issuer: expectedIssuer,
   };
   if (opts.clockToleranceSec !== undefined) verifyOpts.clockTolerance = opts.clockToleranceSec;
   if (opts.now !== undefined) verifyOpts.currentDate = opts.now;
 
   try {
+    let alg: unknown;
+    try { alg = decodeProtectedHeader(token).alg; } catch { /* jose reports the malformed token below */ }
+    if (alg === 'EdDSA') {
+      throw new InvalidSignatureError('Signed with the retired Ed25519 key: Parafé refuses these tokens since 2026-10-09');
+    }
     const { payload } = await jwtVerify(token, async (header) => {
       const found = await brokerKeyFor(opts.key, header);
       keyId = found.keyId;
