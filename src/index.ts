@@ -81,6 +81,7 @@ export {
   WrongArtifactTypeError,
   KeyNotFoundError,
   ProofInvalidError,
+  IssuerRevokedError,
   NotImplementedError,
   type VerifyErrorCode,
 } from './errors.js';

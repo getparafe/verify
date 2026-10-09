@@ -11,6 +11,7 @@ export type VerifyErrorCode =
   | 'KEY_NOT_FOUND'
   | 'PROOF_INVALID'
   | 'AP2_MANDATE_INVALID'
+  | 'ISSUER_REVOKED'
   | 'NOT_IMPLEMENTED';
 
 export class VerifyError extends Error {
@@ -110,6 +111,20 @@ export class NotImplementedError extends VerifyError {
   constructor(what: string) {
     super('NOT_IMPLEMENTED', `${what} is not yet implemented`);
     this.name = 'NotImplementedError';
+  }
+}
+
+/**
+ * The agent that signed the artifact was revoked (broker decision (f)). Its
+ * receipts check out only with the broker's acknowledgment that it indexed them
+ * before `revokedAt`.
+ */
+export class IssuerRevokedError extends VerifyError {
+  readonly revokedAt: string;
+  constructor(revokedAt: string, message?: string) {
+    super('ISSUER_REVOKED', message ?? `The agent that signed this was revoked at ${revokedAt}. Pass the broker's acknowledgment of this receipt (acknowledgment, with key) to check it was filed before then.`);
+    this.name = 'IssuerRevokedError';
+    this.revokedAt = revokedAt;
   }
 }
 

@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { decodeJwt, type JWK } from 'jose';
 import {
   verifyActionReceipt, verifyIndexAck, verifySessionIndex, verifyReceipt, receiptHash, consentRef, entryHash,
-  staticJwks, type ReceiptV2Payload,
+  staticJwks, IssuerRevokedError, type ReceiptV2Payload,
 } from '../../src/index.js';
 
 const fx = JSON.parse(readFileSync(new URL('../fixtures/broker-phase2-artifacts.json', import.meta.url), 'utf8'));
@@ -69,6 +69,57 @@ describe('action receipts', () => {
     const forged = tamper(fx.action_receipts[3], { iss: fx.shop_did });
     const r = await verifyActionReceipt(forged, { brokerUrl: 'https://broker.test', fetch: didFetch, now });
     expect(r.valid).toBe(false);
+  });
+});
+
+describe("a revoked agent's receipts (broker decision (f))", () => {
+  const shopId = fx.shop_did.split(':').pop();
+  const shopReceipt = fx.action_receipts[1];
+  const shopAck = fx.acknowledgments[1];
+  const indexedAt = decodeJwt(shopAck).indexed_at as string;
+  const revokedFetch = (revokedAt: string | undefined) => vi.fn(async () => new Response(JSON.stringify({
+    error: 'agent_revoked', ...(revokedAt ? { revoked_at: revokedAt } : {}),
+    did_document: fx.did_documents[shopId], did_document_metadata: { deactivated: true },
+  }), { status: 410 })) as unknown as typeof fetch;
+  const after = new Date(Date.parse(indexedAt) + 60_000).toISOString();
+  const before = new Date(Date.parse(indexedAt) - 60_000).toISOString();
+  const opts = (revokedAt: string | undefined, extra: Record<string, unknown> = {}) => ({ brokerUrl: 'https://broker.test', fetch: revokedFetch(revokedAt), now, ...extra });
+
+  it('checks out with the broker acknowledgment of a receipt indexed before the revocation', async () => {
+    const r = await verifyActionReceipt(shopReceipt, opts(after, { acknowledgment: shopAck, key }));
+    expect(r.valid).toBe(true);
+    expect(r.issuerRevokedAt).toBe(after);
+    expect(r.claims).toMatchObject({ iss: fx.shop_did, action: 'create_order' });
+  });
+
+  it('without an acknowledgment, says the agent was revoked', async () => {
+    const r = await verifyActionReceipt(shopReceipt, opts(after));
+    expect(r.valid).toBe(false);
+    expect(r.error?.code).toBe('ISSUER_REVOKED');
+    expect((r.error as IssuerRevokedError).revokedAt).toBe(after);
+  });
+
+  it('a receipt indexed after the revocation, an acknowledgment of another receipt, or a tampered one, fails', async () => {
+    const late = await verifyActionReceipt(shopReceipt, opts(before, { acknowledgment: shopAck, key }));
+    expect(late.error?.code).toBe('ISSUER_REVOKED');
+    const other = await verifyActionReceipt(shopReceipt, opts(after, { acknowledgment: fx.acknowledgments[0], key }));
+    expect(other.error?.code).toBe('MALFORMED');
+    const tampered = await verifyActionReceipt(shopReceipt, opts(after, { acknowledgment: tamper(shopAck, { indexed_at: before }), key }));
+    expect(tampered.valid).toBe(false);
+    expect(tampered.error?.code).toBe('INVALID_SIGNATURE');
+  });
+
+  it('an acknowledgment without the broker key source is refused; an active agent has no issuerRevokedAt', async () => {
+    const noKey = await verifyActionReceipt(shopReceipt, opts(after, { acknowledgment: shopAck }));
+    expect(noKey.valid).toBe(false);
+    expect(noKey.error?.code).toBe('MALFORMED');
+    const active = await verifyActionReceipt(shopReceipt, { brokerUrl: 'https://broker.test', fetch: didFetch, now, acknowledgment: shopAck, key });
+    expect(active.valid).toBe(true);
+    expect(active).not.toHaveProperty('issuerRevokedAt');
+  });
+
+  it('a 410 without a revocation time is a key fetch failure', async () => {
+    await expect(verifyActionReceipt(shopReceipt, opts(undefined, { acknowledgment: shopAck, key }))).rejects.toMatchObject({ code: 'KEY_FETCH_FAILED' });
   });
 });
 

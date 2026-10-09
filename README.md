@@ -14,7 +14,7 @@ artifact + Parafe's keys (JWKS, by kid)  →  ES256 / Ed25519 verify  →  valid
 
 No account. No permission. With `staticJwks()`, no network at all. `createPublicKeySource` fetches the JWKS on first use, again every 24 hours (`cacheTtlMs`) and when an artifact names an unknown `kid`, and throws `KEY_FETCH_FAILED` if the broker is unreachable then. `verifyActionReceipt` and `verifyPresentationProof` fetch the agent's DID document unless you pass `issuerKey` / `initiatorKey`.
 
-**What offline verification can't tell you.** A valid result means Parafe signed the artifact, it is unaltered and it hasn't expired. It can't see revocation: a credential or consent token that verifies here may belong to an agent revoked since (there is no status list yet). Consent tokens last 5 minutes and credentials 30 days, which bounds the gap. When it matters, ask the broker: `POST /consent/verify` refuses tokens of a revoked agent, and an agent's DID document (`/agents/<id>/did.json`) answers 404 once it is revoked or suspended.
+**What offline verification can't tell you.** A valid result means Parafe signed the artifact, it is unaltered and it hasn't expired. It can't see revocation: a credential or consent token that verifies here may belong to an agent revoked since (there is no status list yet). Consent tokens last 5 minutes and credentials 30 days, which bounds the gap. When it matters, ask the broker: `POST /consent/verify` refuses tokens of a revoked agent, and an agent's DID document (`/agents/<id>/did.json`) answers 404 while it is suspended and 410 `agent_revoked` once it is revoked.
 
 **Platforms.** Node 18 and later, with `import` or `require()` (CommonJS TypeScript projects included): the CommonJS build bundles the one ESM-only dependency, and v1 (Ed25519) receipts verify without WebCrypto. CI tests Node 20 and releases are tested on Node 22; Node 18 is checked by hand, not in CI. Browsers work too: since 2026-10-08 the broker's JWKS and agents' DID documents allow cross-origin reads, so `createPublicKeySource` can fetch them from a web page (against an older broker, pass the keys with `staticJwks()`).
 
@@ -94,6 +94,7 @@ Explicit variants skip format detection: `verifyCredentialJWT`, `verifyConsentJW
 
 **Action receipts and the session index (0.4.0).** The agent that performs or refuses an action signs an *action receipt* (a JWS with its own registered key, `typ: parafe-action-receipt+jwt`, `kid` = `<agent DID>#keys-1`) naming the action, `result` (`success` or `error`, with an error code such as `excluded`) and the consent token it acted under (`consent_ref` = base64url SHA-256 of the token). Either participant files it with the broker, which chains it per session and returns a signed *index acknowledgment* (`typ: parafe-index-ack+jwt`). The session receipt's `actions` lists every filed receipt by hash, and `chain_head` commits to the list.
 - `verifyActionReceipt` checks the agent's signature with the key in its DID document (fetched from `brokerUrl`, or pass `issuerKey`); `consentToken` and `expectedSessionId` bind it to your session.
+- A revoked agent's receipts (0.7.0, broker from 2026-10-09): its DID document answers 410 with the key and `revoked_at`. Its key may have been stolen and a receipt's `iat` is whatever the signer wrote, so the receipt checks out only with the broker's acknowledgment that it was indexed before the revocation: pass `acknowledgment` (from filing, or `GET /sessions/:id/action-receipts`) and `key`. The result carries `issuerRevokedAt`; without an acknowledgment, or indexed later, it fails with `ISSUER_REVOKED`. With `issuerKey` no DID document is fetched, so this check doesn't run: you vouch for the key.
 - `verifyIndexAck` checks the broker's signature and that `entry_hash` recomputes.
 - `verifySessionIndex(claims, { receipts, acknowledgments, key })`, after `verifyReceipt`, recomputes `chain_head` from `actions` (`entry_hash` = base64url SHA-256 of `"<seq>|<receipt_hash>|<prev>"`, `prev` empty for the first), reports where each receipt you hold is listed (`listed[i].seq`, `null` if it isn't) and checks each acknowledgment matches its entry. A receipt you hold that isn't listed fails the check: it was never filed.
 
@@ -145,6 +146,7 @@ interface VerifyResult<T> {
   keyId?: string;
   verifiedAt: string;
   error?: VerifyError;
+  issuerRevokedAt?: string; // action receipts: the signer was revoked then; the receipt was indexed before
 }
 ```
 
@@ -164,6 +166,7 @@ Signature/claim failures populate `result.error` rather than throwing. Key-fetch
 | `KEY_NOT_FOUND` | The artifact names a `kid` the broker doesn't publish, or an ES256 artifact met an Ed25519-only `staticKey()` |
 | `PROOF_INVALID` | A presentation proof didn't check out (`verifyPresentationProof`) |
 | `AP2_MANDATE_INVALID` | An AP2 mandate didn't verify (`verifyAp2Mandate`, `verifyAp2Chain`) |
+| `ISSUER_REVOKED` | The agent that signed an action receipt was revoked, and no broker acknowledgment shows the receipt was indexed before then (`IssuerRevokedError`, with `revokedAt`) |
 | `KEY_FETCH_FAILED` | (throws) — broker unreachable or returned bad data, including a JWKS entry whose `kid` isn't its key's RFC 7638 thumbprint |
 | `KEY_PIN_MISMATCH` | (throws) — no broker key matches the pin's `keyId` or thumbprint |
 

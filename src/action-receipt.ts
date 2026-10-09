@@ -1,6 +1,6 @@
 import { jwtVerify, importJWK, decodeProtectedHeader, decodeJwt, type JWK } from 'jose';
 import { sha256 } from '@noble/hashes/sha256';
-import { InvalidSignatureError, KeyFetchError, KeyNotFoundError, MalformedArtifactError, VerifyError } from './errors.js';
+import { InvalidSignatureError, IssuerRevokedError, KeyFetchError, KeyNotFoundError, MalformedArtifactError, VerifyError } from './errors.js';
 import { brokerKeyFor } from './internal/broker-key.js';
 import { coerceJoseError } from './jwt-verify.js';
 import type {
@@ -45,6 +45,8 @@ export interface ActionReceiptOptions {
   /**
    * The issuing agent's registered public key as a JWK. If omitted, it is read
    * from the agent's DID document at `<brokerUrl>/agents/<agent_id>/did.json`.
+   * With it, nothing is fetched, so a revoked agent isn't detected and
+   * `acknowledgment` is ignored: you vouch for the key.
    */
   issuerKey?: JWK;
   /** Broker base URL, to fetch the issuer's DID document. Default https://api.parafe.ai. */
@@ -53,13 +55,22 @@ export interface ActionReceiptOptions {
   expectedSessionId?: string;
   /** If set, the receipt's `consent_ref` must be this consent token's hash. */
   consentToken?: string;
+  /**
+   * For an agent since revoked (its DID document answers 410 with `revoked_at`):
+   * the broker's acknowledgment of this receipt, from filing it or from
+   * `GET /sessions/:id/action-receipts`. The receipt checks out only if the
+   * broker indexed it before the revocation. Needs `key`.
+   */
+  acknowledgment?: string;
+  /** The broker's keys, to check `acknowledgment`. */
+  key?: VerifyOptions['key'];
   /** Override the current time (iat may not be in the future). */
   now?: Date;
   fetch?: typeof fetch;
 }
 
-async function issuerJwk(iss: string, kid: string | undefined, opts: ActionReceiptOptions): Promise<JWK> {
-  if (opts.issuerKey) return opts.issuerKey;
+async function issuerJwk(iss: string, kid: string | undefined, opts: ActionReceiptOptions): Promise<{ jwk: JWK; revokedAt?: string }> {
+  if (opts.issuerKey) return { jwk: opts.issuerKey };
   const agentId = iss.split(':').pop() ?? '';
   if (!iss.startsWith('did:web:') || !iss.includes(':agents:') || !agentId.startsWith('prf_agent_')) {
     throw new MalformedArtifactError("iss is not a Parafé agent DID; pass issuerKey", 'iss');
@@ -73,12 +84,43 @@ async function issuerJwk(iss: string, kid: string | undefined, opts: ActionRecei
   } catch (err) {
     throw new KeyFetchError(url, `Could not fetch the issuer's DID document: ${String(err)}`, undefined, err);
   }
-  if (!res.ok) throw new KeyFetchError(url, `Could not fetch the issuer's DID document (${res.status})`, res.status);
-  const doc = (await res.json()) as { id?: string; verificationMethod?: Array<{ id?: string; publicKeyJwk?: JWK }> };
+  type DidDocument = { id?: string; verificationMethod?: Array<{ id?: string; publicKeyJwk?: JWK }> };
+  let doc: DidDocument;
+  let revokedAt: string | undefined;
+  if (res.status === 410) {
+    // Decision (f): a revoked agent's document, with when it was revoked.
+    const body = (await res.json().catch(() => ({}))) as { revoked_at?: unknown; did_document?: DidDocument };
+    if (typeof body.revoked_at !== 'string' || Number.isNaN(Date.parse(body.revoked_at)) || !body.did_document) {
+      throw new KeyFetchError(url, "The issuer's DID document is gone (410)", 410);
+    }
+    doc = body.did_document;
+    revokedAt = body.revoked_at;
+  } else {
+    if (!res.ok) throw new KeyFetchError(url, `Could not fetch the issuer's DID document (${res.status})`, res.status);
+    doc = (await res.json()) as DidDocument;
+  }
   if (doc.id !== iss) throw new MalformedArtifactError("The DID document is not the issuer's", 'iss');
   const method = doc.verificationMethod?.find((m) => m.id === kid);
   if (!method?.publicKeyJwk) throw new KeyNotFoundError(kid ?? '(none)', `The issuer's DID document has no key ${kid}`);
-  return method.publicKeyJwk;
+  return revokedAt ? { jwk: method.publicKeyJwk, revokedAt } : { jwk: method.publicKeyJwk };
+}
+
+// A revoked signer's receipt counts only if the broker acknowledged indexing it
+// before the revocation: the key may have been stolen, and a receipt's own iat
+// is whatever the signer wrote.
+async function checkFiledBefore(jws: string, iss: string, sessionId: unknown, revokedAt: string, opts: ActionReceiptOptions): Promise<void> {
+  if (!opts.acknowledgment) throw new IssuerRevokedError(revokedAt);
+  if (!opts.key) throw new MalformedArtifactError('Pass key (the broker key source) to check the acknowledgment');
+  const ack = await verifyIndexAck(opts.acknowledgment, { key: opts.key, ...(opts.now ? { now: opts.now } : {}) });
+  if (!ack.valid || !ack.claims) throw ack.error ?? new InvalidSignatureError('The acknowledgment does not verify');
+  const c = ack.claims;
+  if (c.receipt_hash !== receiptHash(jws) || c.receipt_iss !== iss || c.session_id !== sessionId) {
+    throw new MalformedArtifactError('The acknowledgment is for another receipt', 'acknowledgment');
+  }
+  const indexedAt = Date.parse(c.indexed_at);
+  if (Number.isNaN(indexedAt) || indexedAt >= Date.parse(revokedAt)) {
+    throw new IssuerRevokedError(revokedAt, `The agent that signed this was revoked at ${revokedAt}, and the broker indexed this receipt at ${c.indexed_at}, not before.`);
+  }
 }
 
 /**
@@ -104,7 +146,7 @@ export async function verifyActionReceipt(
     }
     if (header.typ !== ACTION_RECEIPT_TYP) throw new MalformedArtifactError(`typ must be ${ACTION_RECEIPT_TYP}`, 'typ');
     if (typeof unverified.iss !== 'string') throw new MalformedArtifactError('iss is required', 'iss');
-    const jwk = await issuerJwk(unverified.iss, header.kid, opts);
+    const { jwk, revokedAt } = await issuerJwk(unverified.iss, header.kid, opts);
     keyId = header.kid;
     const alg = jwk.kty === 'EC' ? 'ES256' : 'EdDSA';
     if (header.alg !== alg) throw new InvalidSignatureError(`The issuer's key signs ${alg}, the receipt says ${header.alg}`);
@@ -131,9 +173,13 @@ export async function verifyActionReceipt(
     if (opts.consentToken !== undefined && p['consent_ref'] !== consentRef(opts.consentToken)) {
       throw new MalformedArtifactError('The receipt is bound to another consent token', 'consent_ref');
     }
+    if (revokedAt) {
+      await checkFiledBefore(jws, unverified.iss, p['session_id'], revokedAt, opts);
+      return { valid: true, claims: payload as unknown as ActionReceiptClaims, format: 'action-receipt', keyId, verifiedAt, issuerRevokedAt: revokedAt };
+    }
     return { valid: true, claims: payload as unknown as ActionReceiptClaims, format: 'action-receipt', keyId, verifiedAt };
   } catch (err) {
-    if (err instanceof VerifyError && err.code === 'KEY_FETCH_FAILED') throw err;
+    if (err instanceof VerifyError && (err.code === 'KEY_FETCH_FAILED' || err.code === 'KEY_PIN_MISMATCH')) throw err;
     const error = err instanceof VerifyError ? err : coerceJoseError(err, jws, '');
     return { valid: false, error: error ?? new InvalidSignatureError(), format: 'action-receipt', keyId, verifiedAt };
   }

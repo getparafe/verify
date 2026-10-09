@@ -10,6 +10,8 @@ export interface VerifyResult<T> {
   keyId?: string | undefined;
   verifiedAt: string;
   error?: VerifyError;
+  /** Action receipts: the signer was revoked at this time; the receipt was indexed before it. */
+  issuerRevokedAt?: string;
 }
 
 export interface VerifyOptions {
