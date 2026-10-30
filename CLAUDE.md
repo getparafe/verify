@@ -13,8 +13,8 @@ This is the **neutrality proof point** — any party receiving a Parafe artifact
 - `src/keys.ts` — PublicKeySource abstraction: fetch+cache the broker JWKS (falls back to /public-key; refuses an entry whose `kid` isn't its RFC 7638 thumbprint), `staticJwks`, `staticKey` (Ed25519 only), pinning.
 - `src/internal/broker-key.ts` — picks the broker key for a JWS header (`kid`, DID-URL kid, or no kid = legacy Ed25519).
 - `src/receipt-jws.ts` — v2 receipt (JWS) verification.
-- `src/presentation.ts` — presentation proof (B7) verification against a consent token's `cnf.jkt`.
-- `src/action-receipt.ts` — B6: action receipts (agent-signed, key from the agent's DID document; a revoked agent's 410 document counts only with the broker's acknowledgment that the receipt was indexed before `revoked_at`, broker decision (f)), index acknowledgments (broker-signed) and `verifySessionIndex` (the session receipt's `actions` recompute to `chain_head`; held receipts are listed).
+- `src/presentation.ts` — presentation proof (B7) verification against a consent token's `cnf.jkt`, with the initiator's current key (the DID document's `authentication`; SPEC-006 lists retired keys too).
+- `src/action-receipt.ts` — B6: action receipts (agent-signed, key from the agent's DID document; a revoked agent's 410 document counts only with the broker's acknowledgment that the receipt was indexed before `revoked_at`, broker decision (f); likewise a key the agent replaced, listed with `parafe:retiredAt`, SPEC-006, `KEY_RETIRED`), index acknowledgments (broker-signed) and `verifySessionIndex` (the session receipt's `actions` recompute to `chain_head`; held receipts are listed).
 - `src/identity-credential.ts` — SD-JWT VC identity credential; `matchAgentKey`.
 - `src/ap2/` — AP2 v0.2 mandates (change request A1): `sdjwt.ts` (Delegate SD-JWT chain parsing on OWF `@sd-jwt/core` ≥ 0.20, never `@sd-jwt/decode` (GHSA-f9j6-8p6x-r9j6), plus a strict disclosure pass), `constraints.ts` (every v0.2 constraint), `mandate.ts` (`verifyAp2Chain`, `verifyAp2Mandate`, `ap2MandateReferences`), `errors.ts` (AP2 error codes).
 - `src/jwt-verify.ts` — Credential + consent JWT verification via jose.

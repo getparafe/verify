@@ -12,6 +12,7 @@ export type VerifyErrorCode =
   | 'PROOF_INVALID'
   | 'AP2_MANDATE_INVALID'
   | 'ISSUER_REVOKED'
+  | 'KEY_RETIRED'
   | 'NOT_IMPLEMENTED';
 
 export class VerifyError extends Error {
@@ -111,6 +112,21 @@ export class NotImplementedError extends VerifyError {
   constructor(what: string) {
     super('NOT_IMPLEMENTED', `${what} is not yet implemented`);
     this.name = 'NotImplementedError';
+  }
+}
+
+/**
+ * The key that signed the artifact was retired: the agent replaced it (broker
+ * SPEC-006). Like a revoked agent's receipts, its receipts check out only with
+ * the broker's acknowledgment that it indexed them before `retiredAt`: whoever
+ * holds an old key can backdate what it signs.
+ */
+export class KeyRetiredError extends VerifyError {
+  readonly retiredAt: string;
+  constructor(retiredAt: string, message?: string) {
+    super('KEY_RETIRED', message ?? `The key that signed this was retired at ${retiredAt} (the agent replaced it). Pass the broker's acknowledgment of this receipt (acknowledgment, with key) to check it was filed before then.`);
+    this.name = 'KeyRetiredError';
+    this.retiredAt = retiredAt;
   }
 }
 

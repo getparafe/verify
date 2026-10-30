@@ -12,6 +12,8 @@ export interface VerifyResult<T> {
   error?: VerifyError;
   /** Action receipts: the signer was revoked at this time; the receipt was indexed before it. */
   issuerRevokedAt?: string;
+  /** Action receipts: the signing key was retired (replaced, broker SPEC-006) at this time; the receipt was indexed before it. */
+  keyRetiredAt?: string;
 }
 
 export interface VerifyOptions {

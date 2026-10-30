@@ -1,6 +1,6 @@
 import { jwtVerify, importJWK, decodeProtectedHeader, decodeJwt, type JWK } from 'jose';
 import { sha256 } from '@noble/hashes/sha256';
-import { InvalidSignatureError, IssuerRevokedError, KeyFetchError, KeyNotFoundError, MalformedArtifactError, VerifyError } from './errors.js';
+import { InvalidSignatureError, IssuerRevokedError, KeyRetiredError, KeyFetchError, KeyNotFoundError, MalformedArtifactError, VerifyError } from './errors.js';
 import { brokerKeyFor } from './internal/broker-key.js';
 import { coerceJoseError } from './jwt-verify.js';
 import type {
@@ -56,10 +56,11 @@ export interface ActionReceiptOptions {
   /** If set, the receipt's `consent_ref` must be this consent token's hash. */
   consentToken?: string;
   /**
-   * For an agent since revoked (its DID document answers 410 with `revoked_at`):
-   * the broker's acknowledgment of this receipt, from filing it or from
-   * `GET /sessions/:id/action-receipts`. The receipt checks out only if the
-   * broker indexed it before the revocation. Needs `key`.
+   * For an agent since revoked (its DID document answers 410 with `revoked_at`),
+   * or a key it has since replaced (listed with `parafe:retiredAt`, broker
+   * SPEC-006): the broker's acknowledgment of this receipt, from filing it or
+   * from `GET /sessions/:id/action-receipts`. The receipt checks out only if the
+   * broker indexed it before the revocation or retirement. Needs `key`.
    */
   acknowledgment?: string;
   /** The broker's keys, to check `acknowledgment`. */
@@ -69,7 +70,7 @@ export interface ActionReceiptOptions {
   fetch?: typeof fetch;
 }
 
-async function issuerJwk(iss: string, kid: string | undefined, opts: ActionReceiptOptions): Promise<{ jwk: JWK; revokedAt?: string }> {
+async function issuerJwk(iss: string, kid: string | undefined, opts: ActionReceiptOptions): Promise<{ jwk: JWK; revokedAt?: string; retiredAt?: string }> {
   if (opts.issuerKey) return { jwk: opts.issuerKey };
   const agentId = iss.split(':').pop() ?? '';
   if (!iss.startsWith('did:web:') || !iss.includes(':agents:') || !agentId.startsWith('prf_agent_')) {
@@ -84,7 +85,7 @@ async function issuerJwk(iss: string, kid: string | undefined, opts: ActionRecei
   } catch (err) {
     throw new KeyFetchError(url, `Could not fetch the issuer's DID document: ${String(err)}`, undefined, err);
   }
-  type DidDocument = { id?: string; verificationMethod?: Array<{ id?: string; publicKeyJwk?: JWK }> };
+  type DidDocument = { id?: string; verificationMethod?: Array<{ id?: string; publicKeyJwk?: JWK; 'parafe:retiredAt'?: unknown }> };
   let doc: DidDocument;
   let revokedAt: string | undefined;
   if (res.status === 410) {
@@ -102,14 +103,24 @@ async function issuerJwk(iss: string, kid: string | undefined, opts: ActionRecei
   if (doc.id !== iss) throw new MalformedArtifactError("The DID document is not the issuer's", 'iss');
   const method = doc.verificationMethod?.find((m) => m.id === kid);
   if (!method?.publicKeyJwk) throw new KeyNotFoundError(kid ?? '(none)', `The issuer's DID document has no key ${kid}`);
-  return revokedAt ? { jwk: method.publicKeyJwk, revokedAt } : { jwk: method.publicKeyJwk };
+  // SPEC-006: a key the agent replaced is listed with its retirement time.
+  const retired = method['parafe:retiredAt'];
+  let retiredAt: string | undefined;
+  if (retired !== undefined) {
+    if (typeof retired !== 'string' || Number.isNaN(Date.parse(retired))) throw new MalformedArtifactError("The issuer's key has an unreadable parafe:retiredAt", 'kid');
+    retiredAt = retired;
+  }
+  return { jwk: method.publicKeyJwk, ...(revokedAt ? { revokedAt } : {}), ...(retiredAt ? { retiredAt } : {}) };
 }
 
-// A revoked signer's receipt counts only if the broker acknowledged indexing it
-// before the revocation: the key may have been stolen, and a receipt's own iat
-// is whatever the signer wrote.
-async function checkFiledBefore(jws: string, iss: string, sessionId: unknown, revokedAt: string, opts: ActionReceiptOptions): Promise<void> {
-  if (!opts.acknowledgment) throw new IssuerRevokedError(revokedAt);
+// A revoked signer's receipt, or one signed with a retired key, counts only if
+// the broker acknowledged indexing it before the revocation or retirement: the
+// key may have been stolen, and a receipt's own iat is whatever the signer wrote.
+async function checkFiledBefore(
+  jws: string, iss: string, sessionId: unknown, cutoff: { at: string; retired: boolean }, opts: ActionReceiptOptions
+): Promise<void> {
+  const refused = (message?: string) => (cutoff.retired ? new KeyRetiredError(cutoff.at, message) : new IssuerRevokedError(cutoff.at, message));
+  if (!opts.acknowledgment) throw refused();
   if (!opts.key) throw new MalformedArtifactError('Pass key (the broker key source) to check the acknowledgment');
   const ack = await verifyIndexAck(opts.acknowledgment, { key: opts.key, ...(opts.now ? { now: opts.now } : {}) });
   if (!ack.valid || !ack.claims) throw ack.error ?? new InvalidSignatureError('The acknowledgment does not verify');
@@ -118,14 +129,16 @@ async function checkFiledBefore(jws: string, iss: string, sessionId: unknown, re
     throw new MalformedArtifactError('The acknowledgment is for another receipt', 'acknowledgment');
   }
   const indexedAt = Date.parse(c.indexed_at);
-  if (Number.isNaN(indexedAt) || indexedAt >= Date.parse(revokedAt)) {
-    throw new IssuerRevokedError(revokedAt, `The agent that signed this was revoked at ${revokedAt}, and the broker indexed this receipt at ${c.indexed_at}, not before.`);
+  if (Number.isNaN(indexedAt) || indexedAt >= Date.parse(cutoff.at)) {
+    throw refused(cutoff.retired
+      ? `The key that signed this was retired at ${cutoff.at}, and the broker indexed this receipt at ${c.indexed_at}, not before.`
+      : `The agent that signed this was revoked at ${cutoff.at}, and the broker indexed this receipt at ${c.indexed_at}, not before.`);
   }
 }
 
 /**
- * Verify an action receipt: signed by the acting agent's registered key
- * (`kid` = `<agent DID>#keys-1`, typ parafe-action-receipt+jwt), `ver: 1`,
+ * Verify an action receipt: signed by the acting agent's key named by `kid`
+ * (`<agent DID>#keys-N`, typ parafe-action-receipt+jwt), `ver: 1`,
  * `result` success or error (with a known error code). Returns its claims.
  * Check it was indexed with `verifySessionIndex`.
  */
@@ -146,7 +159,7 @@ export async function verifyActionReceipt(
     }
     if (header.typ !== ACTION_RECEIPT_TYP) throw new MalformedArtifactError(`typ must be ${ACTION_RECEIPT_TYP}`, 'typ');
     if (typeof unverified.iss !== 'string') throw new MalformedArtifactError('iss is required', 'iss');
-    const { jwk, revokedAt } = await issuerJwk(unverified.iss, header.kid, opts);
+    const { jwk, revokedAt, retiredAt } = await issuerJwk(unverified.iss, header.kid, opts);
     keyId = header.kid;
     const alg = jwk.kty === 'EC' ? 'ES256' : 'EdDSA';
     if (header.alg !== alg) throw new InvalidSignatureError(`The issuer's key signs ${alg}, the receipt says ${header.alg}`);
@@ -173,9 +186,16 @@ export async function verifyActionReceipt(
     if (opts.consentToken !== undefined && p['consent_ref'] !== consentRef(opts.consentToken)) {
       throw new MalformedArtifactError('The receipt is bound to another consent token', 'consent_ref');
     }
-    if (revokedAt) {
-      await checkFiledBefore(jws, unverified.iss, p['session_id'], revokedAt, opts);
-      return { valid: true, claims: payload as unknown as ActionReceiptClaims, format: 'action-receipt', keyId, verifiedAt, issuerRevokedAt: revokedAt };
+    if (revokedAt || retiredAt) {
+      // The earlier of the two is the cutoff.
+      const cutoff = retiredAt && (!revokedAt || Date.parse(retiredAt) <= Date.parse(revokedAt))
+        ? { at: retiredAt, retired: true }
+        : { at: revokedAt as string, retired: false };
+      await checkFiledBefore(jws, unverified.iss, p['session_id'], cutoff, opts);
+      return {
+        valid: true, claims: payload as unknown as ActionReceiptClaims, format: 'action-receipt', keyId, verifiedAt,
+        ...(revokedAt ? { issuerRevokedAt: revokedAt } : {}), ...(retiredAt ? { keyRetiredAt: retiredAt } : {}),
+      };
     }
     return { valid: true, claims: payload as unknown as ActionReceiptClaims, format: 'action-receipt', keyId, verifiedAt };
   } catch (err) {

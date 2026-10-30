@@ -43,9 +43,19 @@ async function initiatorJwk(sub: string, opts: PresentationProofOptions): Promis
   const fetchImpl = opts.fetch ?? (globalThis.fetch as typeof fetch);
   const res = await fetchImpl(`${brokerUrl}/agents/${encodeURIComponent(sub)}/did.json`);
   if (!res.ok) throw new ProofInvalidError(`Could not fetch the initiator's DID document (${res.status})`);
-  const doc = (await res.json()) as { verificationMethod?: Array<{ publicKeyJwk?: JWK }> };
-  const jwk = doc.verificationMethod?.[0]?.publicKeyJwk;
-  if (!jwk) throw new ProofInvalidError("The initiator's DID document has no public key");
+  // The current key: the one in authentication (broker SPEC-006 lists retired
+  // keys in verificationMethod too, for old receipts; they prove nothing now).
+  const doc = (await res.json()) as {
+    verificationMethod?: Array<{ id?: string; publicKeyJwk?: JWK }>;
+    authentication?: Array<string | { publicKeyJwk?: JWK }>;
+  };
+  const auth = doc.authentication?.[0];
+  const jwk = typeof auth === 'object' && auth
+    ? auth.publicKeyJwk
+    : typeof auth === 'string'
+      ? doc.verificationMethod?.find((m) => m.id === auth)?.publicKeyJwk
+      : doc.verificationMethod?.length === 1 ? doc.verificationMethod[0]?.publicKeyJwk : undefined;
+  if (!jwk) throw new ProofInvalidError("The initiator's DID document has no current public key");
   return jwk;
 }
 

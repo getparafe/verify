@@ -82,6 +82,7 @@ export {
   KeyNotFoundError,
   ProofInvalidError,
   IssuerRevokedError,
+  KeyRetiredError,
   NotImplementedError,
   type VerifyErrorCode,
 } from './errors.js';
